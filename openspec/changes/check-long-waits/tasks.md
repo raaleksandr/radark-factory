@@ -15,7 +15,7 @@ Change for HO-20261113-ln4m (RB-004).
 ## 3. Hand back
 
 - [x] 3.1 Commit locally (no push, tag, release or reinstall) with a message citing HO-20261113-ln4m; verify `git status` is clean.
-- [ ] 3.2 `ho done HO-20261113-ln4m -m "..."` listing the change name, the commit(s), the test count, the exact rule text as sent with the default 20-minute limit, and any failing or flaky tests; then `ho sync`.
+- [x] 3.2 `ho done HO-20261113-ln4m -m "..."` listing the change name, the commit(s), the test count, the exact rule text as sent with the default 20-minute limit, and any failing or flaky tests; then `ho sync`.
 
 ## Notes
 
