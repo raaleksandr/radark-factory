@@ -28,7 +28,7 @@ Change for HO-20261113-k2wq (RB-003). The `ho` side is HO-20261113-cbcj to `rada
 ## 5. Hand back
 
 - [x] 5.1 Commit locally (no push, tag, release or reinstall) with a message citing HO-20261113-k2wq; verify `git status` is clean.
-- [ ] 5.2 `ho done HO-20261113-k2wq -m "..."` listing both change names (this one and radark-handover's), the commits in both repositories (radark-handover's from its `ho done`), the test counts of both suites, the exact `ho --version` outputs (text and JSON), the start line, the exact stop message for a wrong contract version, and any failing or flaky tests; then `ho sync`.
+- [x] 5.2 `ho done HO-20261113-k2wq -m "..."` listing both change names (this one and radark-handover's), the commits in both repositories (radark-handover's from its `ho done`), the test counts of both suites, the exact `ho --version` outputs (text and JSON), the start line, the exact stop message for a wrong contract version, and any failing or flaky tests; then `ho sync`.
 
 ## Apply results
 
