@@ -117,3 +117,16 @@ appears once in `README.md` (where the commands are introduced); `radark/README.
 - Alias covers imports as well as `-m` (D2), since the handover asks for it "if cheap".
 - Historical documents are not rewritten (Non-Goals).
 - No version bump in this change; release and reinstall are the owner's.
+
+## Apply notes
+
+- D2 was implemented as designed (the meta-path finder works; no fallback was needed): the alias covers both
+  `python -m harness` and `import harness...`.
+- Historical records keep their wording (`docs/decisions/0001-orchestration-harness.md` "built as `harness/`",
+  `docs/research/spikes.md` "created by `harness/sandbox/make_sandbox.py`"); only their pointers to the package README
+  (`radark/README.md` → *Verification results*) were updated, so the links resolve today.
+- Tests that assert the `clear` hint (`test_escalation.py`, `test_prompts.py`) now assert `python -m radark clear <ID>`;
+  `test_alias.py` holds the alias, path and session-settings checks (tasks 2.2 and 3.3).
+- Install check (5.2) used `pip wheel --no-deps` on a copy of the tree outside the repository plus a temp venv: the wheel
+  holds `harness/__init__.py`, `harness/__main__.py`, `radark/*` with `hooks/*.py`, `sandbox/make_sandbox.py` and
+  `README.md`, no tests; `radark --help`, `python -m harness --help` and `import harness.state` work there.

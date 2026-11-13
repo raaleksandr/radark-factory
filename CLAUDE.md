@@ -2,14 +2,14 @@
 
 radark-factory is a deterministic Python dispatcher that runs Claude Code team agents through OpenSpec phases,
 driven by a handover hub (the `ho` CLI from radark-handover). Start with [README.md](README.md), then
-[harness/README.md](harness/README.md) and the specs in [openspec/specs](openspec/specs).
+[radark/README.md](radark/README.md) and the specs in [openspec/specs](openspec/specs).
 
 ## Commands
 
-- Tests: `python -m pytest harness/tests` (about 5 minutes; all must pass). They use fake `ho` and `claude`
-  (`harness/tests/fakes/`), never a real hub or a real Claude Code session.
-- Sandbox for a manual end-to-end check: `python harness/sandbox/make_sandbox.py <dir>` (a real hub and two
-  tiny team repositories), then `python -m harness --config <dir>/harness.toml dry-run`.
+- Tests: `python -m pytest radark/tests` (about 5 minutes; all must pass). They use fake `ho` and `claude`
+  (`radark/tests/fakes/`), never a real hub or a real Claude Code session.
+- Sandbox for a manual end-to-end check: `python radark/sandbox/make_sandbox.py <dir>` (a real hub and two
+  tiny team repositories), then `python -m radark --config <dir>/harness.toml dry-run`.
 
 ## Rules
 

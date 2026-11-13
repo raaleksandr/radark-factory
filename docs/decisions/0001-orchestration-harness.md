@@ -13,7 +13,7 @@ Pro/Max plan. Candidates came from design D1 and three research reports, summari
 [findings/](../research/findings/README.md): [HR-001 Hermes](../research/findings/HR-001-hermes.md),
 [HR-002 orchestrating Claude Code](../research/findings/HR-002-orchestrating-claude-code.md),
 [HR-003 headless limits and terms](../research/findings/HR-003-claude-code-headless-limits.md). The finalist's open
-must-haves were checked by hand ([spikes.md](../research/spikes.md); `harness/README.md` → *Verification results*,
+must-haves were checked by hand ([spikes.md](../research/spikes.md); `radark/README.md` → *Verification results*,
 Claude Code 2.1.302, 2026-10-17).
 
 ## Candidates

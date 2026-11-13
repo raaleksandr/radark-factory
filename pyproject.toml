@@ -20,11 +20,11 @@ classifiers = [
 ]
 
 [project.scripts]
-radark = "harness.__main__:main"
+radark = "radark.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["harness", "harness.*"]
-exclude = ["harness.tests", "harness.tests.*"]
+include = ["radark", "radark.*", "harness"]   # harness: deprecated alias of radark, kept for at least one release
+exclude = ["radark.tests", "radark.tests.*"]
 
 [tool.setuptools.package-data]
-harness = ["hooks/*.py", "sandbox/*.py", "README.md"]
+radark = ["hooks/*.py", "sandbox/*.py", "README.md"]

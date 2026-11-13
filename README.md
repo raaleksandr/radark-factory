@@ -32,18 +32,21 @@ radark --config D:\work\my-factory\harness.toml dry-run
 radark --config D:\work\my-factory\harness.toml run
 ```
 
+`radark` and `python -m radark` are the same command. `python -m harness` is a deprecated alias of `python -m radark`
+(same output and exit code, plus one note on standard error), kept for at least one release.
+
 Keep the configuration and run directory of each pipeline in its own folder, outside this repository.
-Full documentation: [harness/README.md](harness/README.md). Design: [openspec/specs](openspec/specs),
+Full documentation: [radark/README.md](radark/README.md). Design: [openspec/specs](openspec/specs),
 decision record: [docs/decisions](docs/decisions), background research: [docs/research](docs/research).
 
 ## Development
 
 ```
-python -m pytest harness/tests
+python -m pytest radark/tests
 ```
 
 Changes go through OpenSpec (`openspec/changes/`). A sandbox with a fake hub and two tiny team repositories:
-`python harness/sandbox/make_sandbox.py <dir>`.
+`python radark/sandbox/make_sandbox.py <dir>`.
 
 ## License
 

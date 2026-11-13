@@ -6,7 +6,7 @@ Hands-on checks behind the `harness-selection` decision (its tasks 4.2–4.3).
 
 Run as the sandbox verification of the `add-python-harness` change (tasks 5.1–5.6) on a throw-away hub and two
 throw-away team repositories created by `harness/sandbox/make_sandbox.py`; Claude Code 2.1.302, Windows 11,
-the owner's Max login. Full results and deviations: `harness/README.md` → *Verification results*.
+the owner's Max login. Full results and deviations: `radark/README.md` → *Verification results*.
 
 | Design D4 check / must-have | Result |
 |---|---|
