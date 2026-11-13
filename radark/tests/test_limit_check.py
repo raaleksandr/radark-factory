@@ -13,10 +13,12 @@ from radark.tests.test_progress import A, apply_item, committed, git_init, log_e
 FAST = 0.02  # 1.2 s maximum duration
 
 
-def limits(env, maximum=FAST, extension=1, checks=3):
+def limits(env, maximum=FAST, extension=1, checks=3, wrap=0):
+    """`wrap`: the wrap-up grace period; 0 (off) by default, as these tests are about the cut (wrap-up task 5.6)."""
     text = env.config_path.read_text()
     env.config_path.write_text(text.replace("[loop]", f"[loop]\nsession_max_minutes = {maximum}\n"
-                                                      f"limit_check_minutes = {extension}\nlimit_checks = {checks}"))
+                                                      f"limit_check_minutes = {extension}\nlimit_checks = {checks}\n"
+                                                      f"wrap_up_minutes = {wrap}"))
 
 
 def verdict(v, reason="It runs its final e2e suite with steady output."):

@@ -57,6 +57,7 @@ class Config:
     session_max_minutes: float = 180  # cap even for an active session; a checkpoint for a work session (T2, D8)
     limit_check_minutes: float = 60  # extension when the limit check finds the session progressing (D7)
     limit_checks: int = 3  # limit checks per session; 0 turns them off (D7)
+    wrap_up_minutes: float = 15  # grace for a wrap-up at the last time limit; 0 turns it off (wrap-up W7)
     wake_grace_minutes: float = 3  # after a wake, a silent session is ended as interrupted (sleep-aware D3)
     no_progress_limit: int = 2
     usage_backoff_minutes: int = 30
@@ -168,6 +169,7 @@ def load(path: str | Path) -> Config:
         session_max_minutes=float(loop.get("session_max_minutes", loop.get("session_timeout_minutes", 180))),
         limit_check_minutes=float(loop.get("limit_check_minutes", 60)),
         limit_checks=loop.get("limit_checks", 3),
+        wrap_up_minutes=float(loop.get("wrap_up_minutes", 15)),
         wake_grace_minutes=float(loop.get("wake_grace_minutes", 3)),
         no_progress_limit=int(loop.get("no_progress_limit", 2)),
         usage_backoff_minutes=int(loop.get("usage_backoff_minutes", 30)),
@@ -188,6 +190,8 @@ def load(path: str | Path) -> Config:
     n = cfg.limit_checks
     if isinstance(n, bool) or not isinstance(n, int) or n < 0:
         raise ConfigError(f"loop.limit_checks must be an integer of 0 or more, not {n!r}")
+    if cfg.wrap_up_minutes < 0:
+        raise ConfigError("loop.wrap_up_minutes must be 0 or more (0 turns the wrap-up off)")
     if cfg.wake_grace_minutes <= 0:
         raise ConfigError("loop.wake_grace_minutes must be positive")
     if cfg.goal_max_sessions <= 0 or cfg.goal_max_hours <= 0:

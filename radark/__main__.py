@@ -23,7 +23,7 @@ from . import select as sel
 from .awake import FORMS as KEEP_AWAKE_FORMS, KeepAwake, Keeper, cover_end_time, parse_keep_awake, wanted
 from .clock import Sleep, SleepWatch, parse_until
 from .hub import Hub, HoError, check_ho
-from .runner import Runner, SessionResult, kill_pid_tree
+from .runner import WRAP_UP, Runner, SessionResult, kill_pid_tree
 from .state import GoalRun, RunLog, State, now_ts, read_goal, write_json_atomic
 
 CONSULT_TOOLS = ["Read", "Grep", "Glob"]
@@ -221,10 +221,14 @@ class Dispatcher:
 
     def session(self, team: str, prompt: str, phase: str, handover: str | None, *, resume: str | None = None,
                 tools: list[str] | None = None, json_schema: dict | None = None,
-                since: str | None = None, title: str | None = None, step: str | None = None) -> SessionResult:
+                since: str | None = None, title: str | None = None, step: str | None = None,
+                wrap_up: bool = False) -> SessionResult:
         """`since`: start of the item's work when this session continues it (triage or owner resume); progress
         is then measured from that session's snapshot, otherwise from a snapshot taken now (design T3).
-        `title` and `step` (a resume's kind) are for the console only (console-progress D1)."""
+        `title` and `step` (a resume's kind) are for the console only (console-progress D1).
+        `wrap_up`: this is the wrap-up of a session stopped at its last time limit: limited to the grace period,
+        no limit check and no second wrap-up (wrap-up W4). A work session stopped for a wrap-up is resumed here
+        and the wrap-up session's result is returned."""
         runner = self.get_runner()
         repo = self.cfg.team(team).repo
         work = bool(handover) and phase != "consult"
@@ -246,11 +250,13 @@ class Dispatcher:
                                           "phase": phase, "step": step, "pid": pid, "started": now_ts()}
             self.state.save()
 
-        on_deadline, on_abort = (self.limit_watch(team, handover, title, since, base) if work else (None, None))
+        on_deadline, on_abort = (self.limit_watch(team, handover, title, since, base) if work and not wrap_up
+                                 else (None, None))
         old = signal.signal(signal.SIGINT, self._on_interrupt)
         try:
             r = runner.run(team, prompt, phase=phase, handover=handover, resume=resume, tools=tools,
-                           json_schema=json_schema, on_usage=self.usage_watch(team, handover), on_start=on_start,
+                           json_schema=json_schema, timeout_s=self.cfg.wrap_up_minutes * 60 if wrap_up else None,
+                           on_usage=self.usage_watch(team, handover), on_start=on_start,
                            sleep_check=self.slept, on_deadline=on_deadline, on_deadline_abort=on_abort)
         finally:
             signal.signal(signal.SIGINT, old)
@@ -273,6 +279,13 @@ class Dispatcher:
                                                     base if since is None else base_of(rec, since),
                                                     phase=phase, ignored=ignored)
             r.progress_ignored = ignored[0] if ignored else None
+        stopped = work and r.interrupt_cause == WRAP_UP
+        if stopped:  # wrap-up W4 step 1
+            grace, n = self.cfg.wrap_up_minutes, r.extensions_used
+            self.log.write("wrap_up_start", team=team, handover=handover, phase=phase, session=r.session_id,
+                           elapsed_s=r.duration_s, extensions_used=n, grace_min=grace)
+            self.problem(f"{what}: time limit after {duration_text(r.duration_s)}, {n} extension"
+                         f"{'' if n == 1 else 's'} used; asking the session to wrap up within {grace:g} min")
         self.log.write("session_end", team=team, handover=handover, phase=phase, session=r.session_id,
                        exit_code=r.exit_code, outcome=r.outcome, duration_s=r.duration_s,
                        auto_answers=len(r.markers_of("auto_answer")), denials=len(r.denials),
@@ -304,7 +317,38 @@ class Dispatcher:
             self.state.meta.pop("backoff_minutes", None)
         if not work:
             self.state.save()
+        if work and not wrap_up and r.timeout_reason in TIME_LIMIT:  # wrap-up W6.2: a cut work session
+            self.time_limit_entry(rec, r, phase, "cut", r.timeout_reason, r.outcome)
+        if stopped:
+            return self.wrap_up(team, phase, handover, r, since, title)
         return r
+
+    def wrap_up(self, team: str, phase: str, handover: str, r: SessionResult, since: str | None,
+                title: str | None) -> SessionResult:
+        """Resume a work session stopped at its last time limit with the wrap-up prompt (wrap-up W4 steps 3-5);
+        its result is the step's result, and progress counts from the first part's start."""
+        rec = self.state.get(handover) or {}
+        cand = sel.Candidate(kind="work", team=team, handover=handover, title=title or rec.get("title") or "",
+                             phase=phase, recency="", team_index=0, change=rec.get("change"))
+        lock = self.cfg.team(team).repo / ".git" / "index.lock"
+        message = prompts.wrap_up_message(cand, round(r.duration_s / 60), r.extensions_used, self.cfg.wrap_up_minutes,
+                                          lock.is_file(), self.goal_for(team))
+        w = self.session(team, message, phase, handover, resume=r.session_id, since=since or r.started, title=title,
+                         step="wrap-up", wrap_up=True)
+        self.log.write("wrap_up", team=team, handover=handover, phase=phase, session=r.session_id,
+                       elapsed_s=r.duration_s, extensions_used=r.extensions_used, grace_min=self.cfg.wrap_up_minutes,
+                       wrap_up_session=w.session_id, outcome=w.outcome, timeout_reason=w.timeout_reason,
+                       duration_s=w.duration_s)
+        self.time_limit_entry(self.state.get(handover) or rec, r, phase, "wrap_up", w.timeout_reason, w.outcome)
+        return w
+
+    def time_limit_entry(self, rec: dict, r: SessionResult, phase: str, kind: str, reason: str | None,
+                         outcome: str) -> None:
+        """The item's history of sessions wrapped up or cut by a time limit, for its review (wrap-up W6.2)."""
+        rec.setdefault("time_limits", []).append({
+            "session": r.session_id, "phase": phase, "kind": kind, "reason": reason,
+            "extensions": r.extensions_used, "elapsed_s": r.duration_s, "outcome": outcome})
+        self.state.save()
 
     def _on_interrupt(self, signum, frame) -> None:
         self._interrupts += 1
@@ -606,7 +650,8 @@ class Dispatcher:
         """The phase prompt; a review prompt names the worker's denials that were not escalated, then drops them
         (escalate-denial D3)."""
         if cand.phase == "review":
-            return prompts.phase_prompt(cand, goal, denials=rec.pop("unescalated_denials", None))
+            return prompts.phase_prompt(cand, goal, denials=rec.pop("unescalated_denials", None),
+                                        time_limits=rec.get("time_limits"))
         return prompts.phase_prompt(cand, goal)
 
     def hub_phase(self, handover: str, rec: dict, since: str) -> None:
@@ -707,15 +752,19 @@ class Dispatcher:
     # ---- limit check at the maximum duration (check-session-at-time-limit)
 
     def limit_watch(self, team: str, handover: str, title: str | None, since: str | None, base: dict | None):
-        """Runner callbacks for a work session's limit checks (design D1, D5); (None, None) when checks are off."""
+        """Runner callbacks for a work session's limit checks (design D1, D5) and its wrap-up at the last deadline
+        (wrap-up W2, W3); (None, None) when checks and the wrap-up are both off."""
         check_team = self.product_team()
-        if check_team is None or self.cfg.limit_checks <= 0:
+        checks = self.cfg.limit_checks if check_team is not None else 0
+        wrap = self.cfg.wrap_up_minutes > 0
+        if checks <= 0 and not wrap:
             return None, None
         used, aborted = [0], threading.Event()
 
-        def on_deadline(r: SessionResult, elapsed: float) -> float | None:
-            if used[0] >= self.cfg.limit_checks:  # extensions used up: ended at its deadline without a check
-                return None
+        def on_deadline(r: SessionResult, elapsed: float) -> float | str | None:
+            r.extensions_used = used[0]
+            if used[0] >= checks:  # no extension left: wrap up, or end at the deadline without a check
+                return WRAP_UP if wrap else None
             rec = self.state.get(handover)
             progress = self.made_progress(team, handover, since or r.started,
                                           base if since is None else base_of(rec, since) if rec else None)
@@ -724,6 +773,7 @@ class Dispatcher:
                 return None
             if verdict["verdict"] == "progressing":
                 used[0] += 1
+                r.extensions_used = used[0]
                 return self.cfg.limit_check_minutes * 60
             r.limit_reason = verdict["reason"]
             return None
@@ -1379,7 +1429,8 @@ ASCII = {"·": "-", "→": "->", "…": "...", "–": "-"}  # fallbacks for a co
 STEP_KIND = {"goal": "goal check", "idle": "idle ask", "consult": "triage consultation",
              "limit_check": "limit check"}
 TIME_LIMIT = {"idle_timeout": "idle time limit", "max_time": "time limit"}
-INTERRUPT_CAUSE = {"sleep": "computer slept", "owner": "owner", "dispatcher_stopped": "dispatcher stopped"}
+INTERRUPT_CAUSE = {"sleep": "computer slept", "owner": "owner", "dispatcher_stopped": "dispatcher stopped",
+                   WRAP_UP: "asked to wrap up"}
 
 
 def utf8_console() -> bool:

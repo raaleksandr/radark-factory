@@ -323,6 +323,21 @@ def test_session_ending_during_the_check_aborts_it(env):
     assert r.outcome == "finished" and r.timeout_reason is None and aborted == [1]
 
 
+def test_deadline_answer_wrap_up_stops_the_session_as_interrupted(env):
+    """`WRAP_UP` ends the session as interrupted with cause `wrap_up`, not by a time limit (wrap-up W3)."""
+    calls = []
+
+    def on_deadline(r, elapsed):
+        calls.append(elapsed)
+        r.extensions_used = 2
+        return runner_mod.WRAP_UP
+    r = run(env, [{"steps": [START, {"active": 30, "every": 0.2}], "result": {}}], timeout_s=1, idle_s=60,
+            on_deadline=on_deadline)
+    assert r.interrupt_cause == "wrap_up" and r.outcome == "interrupted"
+    assert not r.timed_out and r.timeout_reason is None and r.extensions_used == 2
+    assert len(calls) == 1 and r.duration_s < 20
+
+
 def test_failing_deadline_callback_ends_by_max_time(env):
     def on_deadline(r, elapsed):
         raise RuntimeError("x")

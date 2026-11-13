@@ -92,9 +92,10 @@ def _with_rule(text: str, goal: str | None) -> str:
     return text + "\n\n" + (goal_block(goal) + "\n\n" if goal else "") + STANDING_RULE
 
 
-def phase_prompt(c: Candidate, goal: str | None = None, denials: list[dict] | None = None) -> str:
+def phase_prompt(c: Candidate, goal: str | None = None, denials: list[dict] | None = None,
+                 time_limits: list[dict] | None = None) -> str:
     """`denials`: the worker's permission denials that were not escalated, named in a review prompt
-    (escalate-denial D3)."""
+    (escalate-denial D3); `time_limits`: the item's sessions wrapped up or cut by a time limit (wrap-up W6.3)."""
     head = f"Handover {c.handover} (\"{c.title}\"). Phase: {c.phase}.\n\n"
     if c.phase == "propose":
         body = (
@@ -131,6 +132,8 @@ def phase_prompt(c: Candidate, goal: str | None = None, denials: list[dict] | No
                 + "\nCheck that nothing the handover asks for was skipped because of them; if something was, "
                 "return the handover."
             )
+        if time_limits:
+            body += "\n\n" + time_limit_note(time_limits)
     elif c.phase == "archive":
         body = (
             f"The author has closed handover {c.handover}. Archive {_change_ref(c)} "
@@ -147,7 +150,64 @@ def phase_prompt(c: Candidate, goal: str | None = None, denials: list[dict] | No
     return _with_rule(head + body, goal)
 
 
-TIMEOUT_LABELS = {"idle_timeout": "the inactivity limit (no output for too long)",
+def _hours(seconds: float) -> str:
+    """`45 min` under 2 h, `6 h`, `2 h 05 min` (wrap-up W6.3)."""
+    minutes = round((seconds or 0) / 60)
+    if minutes < 120:
+        return f"{minutes} min"
+    return f"{minutes // 60} h" + (f" {minutes % 60:02d} min" if minutes % 60 else "")
+
+
+def _extensions(n: int) -> str:
+    return f"{n} extension" + ("" if n == 1 else "s")
+
+
+def time_limit_note(entries: list[dict]) -> str:
+    """The review paragraph on the worker's sessions that ran into the time limit (wrap-up W6.3)."""
+    items = []
+    for e in entries:
+        extensions = _extensions(int(e.get("extensions") or 0))
+        if e.get("kind") == "wrap_up":
+            outcome = e.get("outcome") or "?"
+            if e.get("reason"):
+                outcome += f", {e['reason']}"
+            items.append(f"wrapped up after {_hours(e.get('elapsed_s'))} with {extensions} ({outcome})")
+        else:
+            items.append(f"cut by {e.get('reason') or 'max_time'} after {_hours(e.get('elapsed_s'))} with {extensions}")
+    return (
+        f"The worker's sessions on this handover ran into the time limit: {'; '.join(items)}. The task may be too big "
+        "for one session: check the result's `Left:` list, and if work is left, return the handover for it or record "
+        "it as a follow-up (a new backlog item or handover) and say which in your close or return message."
+    )
+
+
+def wrap_up_message(c: Candidate, minutes: int, extensions: int, grace: float, index_lock: bool = False,
+                    goal: str | None = None) -> str:
+    """Resumes a work session stopped at its last time limit and asks it to wrap up within `grace` minutes
+    (wrap-up W5)."""
+    ext = f" and {extensions} limit-check {'extension' if extensions == 1 else 'extensions'}" if extensions > 0 else ""
+    text = (
+        f"The dispatcher stopped this session: it reached its time limit after {minutes} min{ext}, in the {c.phase} "
+        f"phase of handover {c.handover}, and no extension is left. You now have {grace:g} min to wrap up; after that "
+        "the session is cut. The step that was running was cut off: the working tree may hold a partial edit, and an "
+        "interrupted git command may have left a stale `.git/index.lock`" + (" (one exists now)" if index_lock else "")
+        + ". Check `git status` and your last step first: finish the partial step only if it is quick, otherwise undo "
+        "it (remove the lock only if no git process is running). Start no new work. Commit what works. Then report "
+        "what is done the way this phase reports it, and name what is left so the author can hand it over as a "
+        "follow-up: "
+    )
+    if c.phase == "apply":
+        text += (
+            "check off the finished tasks in the change's `tasks.md`, write the open ones under a `Left for a "
+            f"follow-up` note there, commit, and report with `ho done {c.handover} -m \"<summary>\"` whose summary "
+            "starts with `Wrapped up at the time limit.` and has a line `Left: <what is left>`. " + APPLY_NO_ARCHIVE
+        )
+    else:
+        text += "say what is left on a line starting `Left:` in your final message. " + _closing(c)
+    return _with_rule(text, goal)
+
+
+TIMEOUT_LABELS ={"idle_timeout": "the inactivity limit (no output for too long)",
                   "max_time": "the maximum session duration"}
 
 

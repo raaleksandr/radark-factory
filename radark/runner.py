@@ -21,6 +21,7 @@ HOOKS_DIR = Path(__file__).resolve().parent / "hooks"
 OUR_TOOLS = {"AskUserQuestion"}  # denied by our own hook; recorded through markers, not as owner denials
 RECENT_EVENTS = 40  # events kept for the limit check's digest (check-session-at-time-limit D3)
 TEXT_CHARS, TOOL_CHARS = 300, 150
+WRAP_UP = "wrap_up"  # `on_deadline` answer: stop the session and resume it with a wrap-up prompt (wrap-up W3)
 
 
 @dataclass
@@ -60,6 +61,7 @@ class SessionResult:
     recent: deque = field(default_factory=lambda: deque(maxlen=RECENT_EVENTS))
     running_tool: tuple | None = None
     limit_reason: str | None = None  # the product team's reason when its limit check judged the session hung
+    extensions_used: int = 0  # limit-check extensions granted before the last deadline (wrap-up W3)
 
     def markers_of(self, event: str) -> list[dict]:
         return [m for m in self.markers if m.get("event") == event]
@@ -179,8 +181,9 @@ class Runner:
         `on_start(session_id, run_id, pid)` right after the process starts; `sleep_check()` (a `Sleep` or None)
         every loop iteration: after a sleep a session silent for `grace_s` is ended as interrupted (design D3).
         `on_deadline(result, elapsed_s)` runs in a thread when the maximum duration is reached: seconds move the
-        deadline, None ends the session by `max_time`; while it runs, `max_time` waits. `on_deadline_abort()` is
-        called when the session ends while it runs (check-session-at-time-limit D1)."""
+        deadline, None ends the session by `max_time`, `WRAP_UP` ends it as interrupted with cause `wrap_up` so the
+        dispatcher can resume it with a wrap-up prompt (wrap-up W3); while it runs, `max_time` waits.
+        `on_deadline_abort()` is called when the session ends while it runs (check-session-at-time-limit D1)."""
         session_id = resume or session_id or str(uuid.uuid4())
         run_id = session_id if not resume else f"{session_id}-r{int(time.time())}"
         repo = self.cfg.team(team).repo
@@ -222,7 +225,12 @@ class Runner:
                 woke = None
             if check is not None and not check.is_alive():
                 check = None
-                if answer and answer[0]:
+                if answer and answer[0] == WRAP_UP:
+                    if r.timeout_reason is None and r.interrupt_cause is None:
+                        r.interrupt_cause = WRAP_UP
+                        kill_tree(self.proc)
+                    expired = True
+                elif answer and answer[0]:
                     max_s += answer[0]
                 else:
                     expired = True

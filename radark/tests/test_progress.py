@@ -43,11 +43,13 @@ def apply_item(env, tasks=None):
     return d
 
 
-def limits(env, idle=20, maximum=360, checks=0):
-    """Session limits; limit checks off unless `checks` is given (check-session-at-time-limit)."""
+def limits(env, idle=20, maximum=360, checks=0, wrap=0):
+    """Session limits; limit checks off unless `checks` is given (check-session-at-time-limit), and the wrap-up
+    off unless `wrap` is given, as these tests are about the cut (wrap-up-at-time-limit task 5.6)."""
     text = env.config_path.read_text()
     env.config_path.write_text(text.replace("[loop]", f"[loop]\nsession_idle_minutes = {idle}\n"
-                                                      f"session_max_minutes = {maximum}\nlimit_checks = {checks}"))
+                                                      f"session_max_minutes = {maximum}\nlimit_checks = {checks}\n"
+                                                      f"wrap_up_minutes = {wrap}"))
 
 
 def test_work_without_hub_activity_counts(env):

@@ -25,7 +25,7 @@ Runtime: Python 3.12, standard library only. Tests: `pytest`. Tested with Claude
 | `[launch]` `permission_mode`, `extra_args` | default `auto`; `bypassPermissions` and `--bare` are refused |
 | `[answers]` `default`, `escalation_keywords` | the "choose the best variant" text; words that send a question to the owner (matched at a word start, case-insensitive, `ё` = `е`; the defaults include Russian stems such as `удал`, `пуш`, `депло`, `оплат`) |
 | `[triage]` `team`, `teams`, `max_per_handover` | product team that answers questions; `teams` limits whose questions are triaged (default: **every** team, the product team included); escalate after N triages per handover |
-| `[loop]` | `poll_seconds` 120, `session_idle_minutes` 20 (no stream event for that long ends the session), `session_max_minutes` 180 (maximum duration; the old `session_timeout_minutes` is accepted as this; both count awake time only; for a work session a checkpoint, see **Limit check**), `limit_check_minutes` 60 (positive: extension when the limit check finds the session progressing), `limit_checks` 3 (integer ≥ 0: limit checks per session, so a healthy work session runs up to 180 + 3 × 60 = 360 min; 0 turns them off and every session is cut at the maximum), `wake_grace_minutes` 3 (positive: after the computer wakes, a session with no stream line for that long is ended as `interrupted` and resumed), `no_progress_limit` 2, `usage_pause_percent` 90 (integer 1–100: no new step while a usage window not yet reset is used at least this much; 100 turns the prediction off; `run --budget-5h` / `--budget-7d` replace it per window for one run), `usage_backoff_minutes` 30 (doubling up to `usage_backoff_max_minutes` 300; only when a usage-limit hit has no known reset time), `idle_ask` false, `keep_awake` `"on"` (`"off"`, `"on"` or a daily range `"HH:MM-HH:MM"`: when a run keeps the computer from sleeping on its own; `"off"` lets the computer sleep; not a moment, which applies to one run only; `--keep-awake` replaces it for one run, see **Keep awake**) |
+| `[loop]` | `poll_seconds` 120, `session_idle_minutes` 20 (no stream event for that long ends the session), `session_max_minutes` 180 (maximum duration; the old `session_timeout_minutes` is accepted as this; both count awake time only; for a work session a checkpoint, see **Limit check**), `limit_check_minutes` 60 (positive: extension when the limit check finds the session progressing), `limit_checks` 3 (integer ≥ 0: limit checks per session, so a healthy work session runs up to 180 + 3 × 60 = 360 min; 0 turns them off), `wrap_up_minutes` 15 (≥ 0: grace period of the wrap-up at a work session's last time limit, see **Wrap-up**; 0 turns the wrap-up off and such a session is cut at its deadline), `wake_grace_minutes` 3 (positive: after the computer wakes, a session with no stream line for that long is ended as `interrupted` and resumed), `no_progress_limit` 2, `usage_pause_percent` 90 (integer 1–100: no new step while a usage window not yet reset is used at least this much; 100 turns the prediction off; `run --budget-5h` / `--budget-7d` replace it per window for one run), `usage_backoff_minutes` 30 (doubling up to `usage_backoff_max_minutes` 300; only when a usage-limit hit has no known reset time), `idle_ask` false, `keep_awake` `"on"` (`"off"`, `"on"` or a daily range `"HH:MM-HH:MM"`: when a run keeps the computer from sleeping on its own; `"off"` lets the computer sleep; not a moment, which applies to one run only; `--keep-awake` replaces it for one run, see **Keep awake**) |
 | `[goal]` `max_sessions`, `max_hours` | limits of a goal run: 40 sessions (every session counts: work, triage consultation, goal check), 12 hours (usage-limit waits count, sleeps of the computer do not); both positive; `--max-sessions` / `--max-hours` override them |
 
 A broken config (missing value, missing repository path, `ho` / `claude` not found) exits with code 2 and names the problem.
@@ -369,7 +369,9 @@ escalation.
 - **Time limits:** a session is ended (whole process tree) when its stream carries nothing but `tool_progress`
   heartbeats for `session_idle_minutes` (`idle_timeout`; so one tool call longer than that is ended) or after
   `session_max_minutes` (`max_time`); both count awake time only (`QueryUnbiasedInterruptTime` on Windows), so a
-  night's sleep ends no session. The outcome is `error`. If it made progress, the
+  night's sleep ends no session. For a work session the maximum duration is a checkpoint (see **Limit check**),
+  and at its last deadline the session is asked to wrap up instead of being cut (see **Wrap-up**). The outcome of a
+  cut session is `error`. If it made progress, the
   item's next session resumes it once with a "stopped by a time limit, check `git status` and continue" message
   (fresh phase session if the resume fails); without progress the next session starts fresh.
   So that a long command or background wait is not cut silently, every session (new and resumed) carries a
@@ -386,8 +388,9 @@ escalation.
   last event other than a heartbeat, the tool running now, its last 8 status texts and 12 tool calls or failed tool
   results with their age, its progress so far and the path of its stream. It answers `{verdict: progressing | hung,
   reason}`. `progressing` moves the deadline by `limit_check_minutes`; after `limit_checks` extensions the session
-  is cut at its deadline without a check. `hung`, a malformed verdict or a failed check (error, its own limits of
-  `limit_check_minutes` and `session_idle_minutes`) cut it by `max_time` as before; after `hung` the resume message
+  is not checked again and is asked to wrap up at its deadline (see **Wrap-up**). `hung`, a malformed verdict or a
+  failed check (error, its own limits of `limit_check_minutes` and `session_idle_minutes`) cut it by `max_time` as
+  before, without a wrap-up; after `hung` the resume message
   carries the product team's reason. A session that ends during its check ends the check, whose verdict is ignored.
   Not checked: triage consultations, limit checks, goal checks, idle asks, and every session without a product team
   or with `limit_checks = 0`. A check counts as a session of a goal run, never as progress. Console:
@@ -398,6 +401,34 @@ escalation.
   15:39  product · limit check → progressing, +60 min (2 min)
       It runs its final full e2e suite; new results every few minutes.
   ```
+- **Wrap-up:** a work session for a handover that reaches its deadline with no extension left (all `limit_checks`
+  used, `limit_checks = 0`, or no product team configured) is not cut. The dispatcher ends its process tree and at
+  once resumes the same session (`claude -p <wrap-up prompt> --resume <session>`) in the same step, limited to
+  `wrap_up_minutes` (default 15) and without a limit check or a second wrap-up. The prompt gives the grace period,
+  says the running step was cut off (check `git status`, finish the partial step only if it is quick, otherwise undo
+  it), asks to start no new work, commit what works, report the way the phase reports and name what is left on a
+  `Left:` line; for apply: check off finished tasks, write the open ones under a `Left for a follow-up` note in
+  `tasks.md`, and `ho done` with a summary starting `Wrapped up at the time limit.` (never archive). Limit of the
+  mechanism: `claude -p` has no channel into a running session, so the step running at the stop is lost (as with a
+  cut). The stopped first part is `interrupted` (`asked to wrap up`, not an error); the step's outcome is the
+  wrap-up session's, and progress counts from the first part's start. A wrap-up session still running after the
+  grace period is cut by `max_time` (`error`; with progress, resumed by the item's next session as after any time
+  limit). The inactivity limit, a sleep and Ctrl+C apply to it as to any session. No wrap-up for a session judged
+  `hung` or whose check failed, for triage consultations, limit checks, goal checks and idle asks, or with
+  `wrap_up_minutes = 0`. Console:
+
+  ```
+  21:37  ! app HO-20261028-xaai: time limit after 6 h 00 min, 3 extensions used; asking the session to wrap up within 15 min
+  21:37  app · apply → interrupted, asked to wrap up (6 h 00 min)
+  21:37  app · apply · wrap-up · HO-20261028-xaai  "The agent leaves the task and starts blind…"
+  21:45  app · apply · wrap-up → finished (8 min)
+  ```
+
+  The run log has `wrap_up_start` and `wrap_up`; the item's state keeps `time_limits`, one entry per wrap-up and per
+  work session cut by `max_time` or `idle_timeout`. When the product team reviews that handover, its review prompt
+  gets a paragraph that lists them (e.g. `wrapped up after 6 h with 3 extensions (finished)`), says the task may be
+  too big for one session, and asks it to check the result's `Left:` list and, if work is left, to return the
+  handover for it or record a follow-up and say which.
 - **Sleep of the computer:** a gap of a minute or more between real time and awake time is a sleep. It is printed
   once (`! computer slept 01:17–11:14 (9 h 57 min) - not counted`) and logged as `suspend`. Waits for a moment in
   real time (a usage window's reset, a back-off) keep real time, so a window that reset during the night lets the
@@ -460,7 +491,9 @@ escalation.
 `state.json` (per handover: team, change, phase, sessions (with the progress snapshot `base`: branch heads, change,
 checked tasks), no_progress, triage_count, flags, reason, `waiting_for` (while held: the handovers the item waits
 for, each with handover, team, state), `resume_after_timeout` (session, team, phase, reason
-`idle_timeout | max_time | sleep | owner | dispatcher_stopped`, duration_s, limit_reason after a `hung` limit check), escalation link: escalation handover, team, session, phase, reason, question, sent, answered),
+`idle_timeout | max_time | sleep | owner | dispatcher_stopped`, duration_s, limit_reason after a `hung` limit check), `time_limits` (sessions wrapped up or cut by a time limit:
+session, phase, kind `wrap_up | cut`, reason, extensions, elapsed_s, outcome; named in the item's review prompt),
+escalation link: escalation handover, team, session, phase, reason, question, sent, answered),
 `meta` (`usage` per window: utilization 0–1, resets_at Unix s, status, seen; `usage_wait` of the current wait:
 until, window, utilization, cause; `backoff_until`, `backoff_minutes`; `running`: the session now running; `unconfigured`: per handover waiting for a
 team that is not set up and already escalated: team, sender, item, escalation, at), `runs.jsonl` (the run log), `sessions/<run-id>.jsonl` (full stream per session), `markers/<run-id>.jsonl`
@@ -470,8 +503,10 @@ guidance_pending, given_text — the goal text the product team last received �
 
 Run-log events (one JSON line each, with `time`): `dispatcher_start`, `session_start` (team, repo, handover,
 phase, prompt, resume), `session_end` (outcome, exit_code, session, duration_s, auto_answers, denials,
-escalations, timed_out, timeout_reason `idle_timeout | max_time`, interrupt_cause `sleep | owner`, progress_sources `hub | commits | tasks`, stream,
-result tail), `resume_after_timeout` (session, reason, duration_s), `suspend` (start, end in Unix s, seconds, during: team,
+escalations, timed_out, timeout_reason `idle_timeout | max_time`, interrupt_cause `sleep | owner | wrap_up`, progress_sources `hub | commits | tasks`, stream,
+result tail), `resume_after_timeout` (session, reason, duration_s), `wrap_up_start` (team, handover, phase,
+session, elapsed_s, extensions_used, grace_min), `wrap_up` (the same and wrap_up_session, outcome, timeout_reason,
+duration_s), `suspend` (start, end in Unix s, seconds, during: team,
 handover, phase of the running session or null), `interrupted` (team, handover, phase, session, cause
 `dispatcher_stopped`, resumed), `stale_index_lock` (path), `auto_answer`, `question`, `nudge`, `escalation`, `denial`,
 `denial_not_escalated` (team, handover, phase, session, denials: tool, input shortened to 200 characters, phase,

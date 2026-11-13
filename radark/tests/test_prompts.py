@@ -218,3 +218,53 @@ def test_long_wait_rule_interval_follows_the_limit():
         assert f"ended after {limit:g} minutes" in text, limit
         assert f"longer than {interval} minutes" in text and f"every {interval} minutes" in text, limit
     assert "ended after 2.5 minutes" in prompts.long_wait_rule(2.5)
+
+
+WRAP_UP_HEAD = (
+    "The dispatcher stopped this session: it reached its time limit after 360 min and 3 limit-check extensions, in "
+    "the apply phase of handover HO-20261016-ab12, and no extension is left. You now have 15 min to wrap up; after "
+    "that the session is cut. The step that was running was cut off: the working tree may hold a partial edit, and an "
+    "interrupted git command may have left a stale `.git/index.lock`. Check `git status` and your last step first: "
+    "finish the partial step only if it is quick, otherwise undo it (remove the lock only if no git process is "
+    "running). Start no new work. Commit what works. Then report what is done the way this phase reports it, and name "
+    "what is left so the author can hand it over as a follow-up: "
+)
+
+
+def test_wrap_up_message_apply_verbatim():
+    text = prompts.wrap_up_message(cand("apply", change="add-export"), 360, 3, 15)
+    assert text == (
+        WRAP_UP_HEAD + "check off the finished tasks in the change's `tasks.md`, write the open ones under a `Left "
+        "for a follow-up` note there, commit, and report with `ho done HO-20261016-ab12 -m \"<summary>\"` whose "
+        "summary starts with `Wrapped up at the time limit.` and has a line `Left: <what is left>`. "
+        + prompts.APPLY_NO_ARCHIVE + "\n\n" + prompts.STANDING_RULE)
+
+
+def test_wrap_up_message_other_phase_extension_count_lock_and_goal():
+    text = prompts.wrap_up_message(cand("propose"), 180, 0, 15, index_lock=True, goal="Ship it.")
+    assert text.startswith("The dispatcher stopped this session: it reached its time limit after 180 min, in the "
+                           "propose phase of handover HO-20261016-ab12, and no extension is left.")
+    assert "a stale `.git/index.lock` (one exists now). Check" in text
+    assert ("as a follow-up: say what is left on a line starting `Left:` in your final message. "
+            "End your final message with one line `CHANGE: <change-name>`") in text
+    assert prompts.goal_block("Ship it.") in text and text.endswith(prompts.STANDING_RULE)
+    one = prompts.wrap_up_message(cand("review"), 240, 1, 7.5)
+    assert "after 240 min and 1 limit-check extension, in the review" in one and "You now have 7.5 min" in one
+    assert "ho close HO-20261016-ab12" in one and "(one exists now)" not in one
+
+
+def test_review_prompt_time_limit_paragraph_verbatim():
+    history = [{"kind": "wrap_up", "reason": None, "extensions": 3, "elapsed_s": 6 * 3600, "outcome": "finished"},
+               {"kind": "cut", "reason": "max_time", "extensions": 0, "elapsed_s": 3 * 3600 + 300,
+                "outcome": "error"},
+               {"kind": "wrap_up", "reason": "max_time", "extensions": 1, "elapsed_s": 5400, "outcome": "error"}]
+    text = prompts.phase_prompt(cand("review"), time_limits=history)
+    assert (
+        "\n\nThe worker's sessions on this handover ran into the time limit: wrapped up after 6 h with 3 extensions "
+        "(finished); cut by max_time after 3 h 05 min with 0 extensions; wrapped up after 90 min with 1 extension "
+        "(error, max_time). The task may be too big for one session: check the result's `Left:` list, and if work is "
+        "left, return the handover for it or record it as a follow-up (a new backlog item or handover) and say which "
+        "in your close or return message."
+    ) in text
+    assert "ran into the time limit" not in prompts.phase_prompt(cand("review"))
+    assert "ran into the time limit" not in prompts.phase_prompt(cand("review"), time_limits=[])

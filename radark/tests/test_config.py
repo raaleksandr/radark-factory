@@ -166,10 +166,20 @@ def test_limit_check_defaults_and_values(tmp_path):
     assert (cfg.limit_check_minutes, cfg.limit_checks) == (30, 0)
 
 
+def test_wrap_up_minutes_default_value_and_zero(tmp_path):
+    assert config_mod.load(write_config(tmp_path)).wrap_up_minutes == 15
+    p = write_config(tmp_path)
+    p.write_text(p.read_text().replace("[loop]", "[loop]\nwrap_up_minutes = 7.5"))
+    assert config_mod.load(p).wrap_up_minutes == 7.5
+    p.write_text(p.read_text().replace("wrap_up_minutes = 7.5", "wrap_up_minutes = 0"))
+    assert config_mod.load(p).wrap_up_minutes == 0
+
+
 @pytest.mark.parametrize("line,key", [("limit_check_minutes = 0", "limit_check_minutes"),
                                       ("limit_check_minutes = -5", "limit_check_minutes"),
                                       ("limit_checks = -1", "limit_checks"), ("limit_checks = 1.5", "limit_checks"),
-                                      ("limit_checks = true", "limit_checks")])
+                                      ("limit_checks = true", "limit_checks"),
+                                      ("wrap_up_minutes = -1", "loop.wrap_up_minutes")])
 def test_invalid_limit_check_settings_refused(env, capsys, line, key):
     from radark.__main__ import main
     env.config_path.write_text(env.config_path.read_text().replace("[loop]", f"[loop]\n{line}"))
