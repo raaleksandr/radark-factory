@@ -1,0 +1,7 @@
+{
+  "name": "radark-factory",
+  "private": true,
+  "scripts": {
+    "screen-off": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/screen-off.ps1"
+  }
+}

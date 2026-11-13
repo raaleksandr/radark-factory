@@ -1,0 +1,9 @@
+# Local pipeline config and run directory (keep real instances outside this repo)
+harness.toml
+.harness/
+__pycache__/
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.claude/settings.local.json

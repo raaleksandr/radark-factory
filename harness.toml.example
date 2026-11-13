@@ -1,0 +1,63 @@
+# Copy to harness.toml and adjust. Relative paths are resolved from this file's directory.
+
+hub = 'D:\work\hub'
+run_dir = ".harness"          # state.json, runs.jsonl, sessions/, markers/, lock, PAUSE, STOP
+ho = "ho"                     # command name on PATH, or a list such as ["python", 'D:\...\ho.py']
+claude = "claude"
+owner_team = "owner"          # hub team of the human owner: escalation handovers go there (must be in hub.json)
+
+# Teams in priority order (ties in recency go to the earlier team).
+# kind = "technical": OpenSpec phases (propose / apply / archive); "product": act on handovers directly.
+[[teams]]
+id = "strategy"
+repo = 'D:\work\strategy'
+kind = "product"
+
+[[teams]]
+id = "product"
+repo = 'D:\work\product'
+kind = "product"
+
+[[teams]]
+id = "app"
+repo = 'D:\work\app'
+kind = "technical"
+
+[[teams]]
+id = "backend"
+repo = 'D:\work\backend'
+kind = "technical"
+
+[launch]
+permission_mode = "auto"      # never bypassPermissions
+extra_args = []               # e.g. ["--model", "opus"]; never --bare
+
+[answers]
+default = "No user is available. Choose the best variant yourself, record the assumption in the change's design/tasks notes, and continue."
+escalation_keywords = ["push", "deploy", "payment", "delete", "secret", "production",
+                       "пуш", "запуш", "депло", "задепло", "выкат", "развертыв", "развернуть", "оплат", "платеж",
+                       "заплат", "удал", "секрет", "парол", "продакш", "боев"]   # word starts; ё = е
+
+[triage]
+team = "product"
+# teams = ["app", "backend"]   # optional limit; default: every team above, product included
+max_per_handover = 3
+
+[loop]
+poll_seconds = 120
+session_idle_minutes = 20      # no stream event for this long: the session is hung and is ended
+session_max_minutes = 180      # maximum duration (old key session_timeout_minutes = alias); for a work session a
+                               # checkpoint: the product team's limit check may extend it
+limit_check_minutes = 60       # extension when the limit check finds the session progressing
+limit_checks = 3               # limit checks per session (180 + 3 x 60 = up to 360 min); 0 = off, cut at the maximum
+wake_grace_minutes = 3         # after the computer wakes, a session silent this long is ended and resumed
+no_progress_limit = 2
+usage_pause_percent = 90       # no new step while a usage window (five_hour / seven_day) is used this much; 100 = off
+usage_backoff_minutes = 30     # fallback wait after a usage-limit hit with no known reset time (doubling)
+usage_backoff_max_minutes = 300
+idle_ask = false
+# keep_awake = "off"             # off | on | HH:MM-HH:MM (daily range, may cross midnight); --keep-awake overrides
+
+[goal]                         # limits of a goal run (run --goal <file>); --max-sessions / --max-hours override
+max_sessions = 40              # every session counts: work, triage consultation, goal check
+max_hours = 12                 # checked between sessions; usage-limit waits count

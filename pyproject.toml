@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "radark-factory"
+version = "0.1.0"
+description = "A dispatcher that runs Claude Code team agents through OpenSpec phases, driven by a handover hub."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = []          # standard library only; the `ho` hub CLI and `claude` must be on PATH
+keywords = ["claude-code", "agents", "dark-factory", "software-factory", "openspec", "orchestration"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: Microsoft :: Windows",
+    "Environment :: Console",
+]
+
+[project.scripts]
+radark = "harness.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["harness", "harness.*"]
+exclude = ["harness.tests", "harness.tests.*"]
+
+[tool.setuptools.package-data]
+harness = ["hooks/*.py", "sandbox/*.py", "README.md"]
