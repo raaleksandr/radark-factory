@@ -412,7 +412,7 @@ class Dispatcher:
 
     def escalate(self, handover: str, team: str, reason: str, stalled: bool = False, *, session: str | None = None,
                  phase: str | None = None, question=None, result_tail: str = "", title: str | None = None,
-                 body: str | None = None) -> None:
+                 body: str | None = None, denied: list[dict] | None = None) -> None:
         """Mark the item and send the owner an escalation handover from `team` (the escalated session's team);
         `title` / `body` replace the generic wording."""
         rec = self.state.escalate(handover, team, reason, stalled=stalled)
@@ -425,7 +425,7 @@ class Dispatcher:
             body = body or prompts.escalation_body(team=team, handover=handover, reason=reason, phase=phase,
                                                    change=rec.get("change"), question=question,
                                                    result_tail=result_tail, session=session,
-                                                   repo=str(self.cfg.team(team).repo))
+                                                   repo=str(self.cfg.team(team).repo), denied=denied)
             sent = self.send_to_owner(team, title or prompts.escalation_title(team, reason), body, handover, reason)
             if sent:
                 rec["escalation"] = {"handover": sent, "team": team, "session": session, "phase": phase,
@@ -542,9 +542,13 @@ class Dispatcher:
             reasons = [f"blocked on the owner: {blocked}"] if blocked else []
             reasons += [f"asked: {json.dumps(q, ensure_ascii=False)[:300]}" for q in questions]
             reasons += [f"permission denied: {d.get('tool_name')}" for d in r.denials]
+            question = questions[0] if len(questions) == 1 else (questions or None)
+            denied = [denial_entry(d, cand.phase, r.session_id) for d in r.denials]
+            if denied and not questions:  # one clear question for a denial, in every work phase (fewer-owner-waits D8)
+                said = blocked or prompts.parse_blocked(r.result_text) or prompts.parse_blocked(r.assistant_text)
+                question = said or denial_question(denied, cand.phase)
             self.escalate(hid, team, "; ".join(reasons) or "waiting for the owner", session=r.session_id,
-                          phase=cand.phase, question=questions[0] if len(questions) == 1 else (questions or None),
-                          result_tail=tail(r))
+                          phase=cand.phase, question=question, result_tail=tail(r), denied=denied)
             return
         if r.outcome == "usage_limit" or self.state.blocked(hid):
             return
@@ -745,9 +749,29 @@ class Dispatcher:
             self.escalate(hid, team, f"product team asks for the owner: {verdict['reason']}; "
                                      f"question: {json.dumps(question, ensure_ascii=False)[:300]}", **owner)
             return None
+        if verdict.get("note_for_owner"):
+            self.team_decision(tri.team, team, hid, question, verdict)
         message = prompts.resume_message(verdict, question, self.cfg.default_answer)
         return self.session(team, message, cand.phase, hid, resume=asked.session_id, since=since or asked.started,
                             title=rec.get("title") or cand.title, step="triage answer")
+
+    def team_decision(self, triage_team: str, team: str, handover: str, question, verdict: dict) -> None:
+        """Inform the owner of a decision the triage team took, without holding anything: `--expects ack
+        --auto-close`, tag `team-decision`, no `--ref` (fewer-owner-waits D10). A failure is logged and shown only."""
+        title = prompts.team_decision_title(triage_team, team, handover)
+        body = prompts.team_decision_body(triage_team=triage_team, team=team, handover=handover, question=question,
+                                          verdict=verdict)
+        try:
+            sent = self.hub.new(triage_team, self.cfg.owner_team, title, body, tags=["team-decision"],
+                                expects="ack", auto_close=True)["id"]
+        except (HoError, KeyError) as exc:
+            self.log.write("team_decision_send_failed", team=team, handover=handover, triage_team=triage_team,
+                           error=str(exc))
+            self.problem(f"could not send the team-decision handover to {self.cfg.owner_team}: {exc}")
+            return
+        self.log.write("team_decision_sent", team=team, handover=handover, triage_team=triage_team, notice=sent)
+        self.out(f"    team-decision handover {sent} sent to {self.cfg.owner_team} (needs only an acknowledgement)")
+        self.sync_hub()
 
     # ---- limit check at the maximum duration (check-session-at-time-limit)
 
@@ -1704,7 +1728,9 @@ def parse_verdict(r: SessionResult) -> dict | None:
         return None
     if data["verdict"] == "product" and not data.get("answer", "").strip():
         return None
-    return {"verdict": data["verdict"], "answer": data.get("answer", ""), "reason": data["reason"]}
+    note = data.get("note_for_owner")  # optional (fewer-owner-waits D9); a non-string is ignored, not fatal
+    return {"verdict": data["verdict"], "answer": data.get("answer", ""), "reason": data["reason"],
+            **({"note_for_owner": note.strip()} if isinstance(note, str) and note.strip() else {})}
 
 
 def parse_idle_verdict(r: SessionResult) -> dict | None:
@@ -1845,6 +1871,13 @@ def denial_entry(d, phase: str, session: str) -> dict:
     text = command if isinstance(command, str) else json.dumps(tool_input, ensure_ascii=False)
     return {"tool": d.get("tool_name"), "input": short_title(text, 200), "phase": phase, "session": session,
             "at": now_ts()}
+
+
+def denial_question(denied: list[dict], phase: str) -> str:
+    """The owner's question for denials without a `BLOCKED: owner` line (fewer-owner-waits D8)."""
+    names = ", ".join(f"{d.get('tool')} `{d.get('input')}`" for d in denied)
+    return (f"The permission mode denied {names} and the session ended without completing the {phase} phase. "
+            "How should the team go on?")
 
 
 def resume_failed(r: SessionResult) -> bool:

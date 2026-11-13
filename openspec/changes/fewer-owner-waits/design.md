@@ -40,6 +40,16 @@ allow paths are relied on. If it does not hold, the allow paths become deny-with
 narrow form ("run exactly `git restore -- <file>`" would then also be denied, so the reason names re-writing the
 file and the task tool instead); record the outcome in this design.
 
+**Outcome of task 1.1 (2026-11-14, Claude Code 2.1.325, Windows 11, a throw-away git repository and hook, removed
+afterwards):** (a) holds: a `deny` with `permissionDecisionReason` reached the model verbatim (shown as
+`PreToolUse:Bash hook error: <reason>`) and the call was recorded in the result's `permission_denials`. (b) An `allow`
+let `git checkout -- a.txt` run with no denial recorded. Whether an `allow` overrides an auto-mode classifier
+*denial* could not be reproduced: in the throw-away repository the classifier allowed every candidate without a hook
+(`git checkout -- a.txt`, `git reset --hard`, `git clean -fdx`), since it judges by context. Decision: keep the allow
+paths. An allow never widens anything the classifier would allow anyway, and if a classifier denial still wins on
+some version, the session gets the denial plus the denial rule (D6), which names re-writing the file and the task
+tool as the other ways; so the fallback's wording is already in place.
+
 ### D2. Parsing commands conservatively
 
 The hook decides only on a **single simple command**: after trimming, the command must not contain `;`, `&&`,
@@ -172,6 +182,32 @@ plus a `!` console line). The resume of the asking session happens in either cas
 
 **Assumption:** the notice is sent only from triage verdicts. A work session that decides under D9 sends its own
 `ho new` (it is told how), so the engine does not parse anything for that path.
+
+## Implementation notes (apply phase, unattended assumptions)
+
+- **Session root behind a launcher.** A virtual environment's `python.exe` on Windows starts the real interpreter as
+  its child, so the hook's parent may be that launcher, not Claude Code. The root is the hook's parent, walked up
+  while the process name is a Python interpreter (`python*`, `py.exe`); the process table carries the names.
+- **Reused IDs.** On Windows the table also carries creation times; a "child" created before its parent is a reused
+  parent ID and not counted as a descendant.
+- **Discard edge cases.** `git checkout .` (no `--`) is denied like `git checkout -- .`; `git restore` with another
+  option (`-p`, `--ours`, …), a path that does not exist (e.g. a deleted file) and `git checkout <branch>` are left to
+  the permission mode (no decision), never allowed.
+- **Stop edge cases.** `kill %1` (a shell job) and `kill -l` get no decision; a negative ID (a process group), a
+  variable ID (`$pid`), piped input and a failed process-table read are denied with the stop reason. PowerShell's
+  `kill` alias with named parameters is read as `Stop-Process`.
+- **Compound commands.** Split on `;`, `&&`, `||`, `|`, `&`, newlines; any broad discard or a stop by name / of a
+  non-literal ID in a part is denied; nothing in a compound command is allowed.
+- **Temp in shell commands.** The session temp dir and the repository (also in Git Bash form `/c/...`) are removed
+  from the command text before the system temp paths are searched, so a repository or run directory under the
+  system temp directory is never denied.
+- **Markers.** Each guard decision writes a `guard` marker (decision, rule, tool, input ≤ 200 chars) for the run's
+  record; it does not change the session outcome. A guard exception prints nothing (the permission mode decides).
+- **Escalation question.** A text question (denial) is shown in the escalation body as a quote, a structured one as
+  JSON as before. With an escalation keyword question in the same session, that question stays the escalation's
+  question and the `## Denied` section is still listed.
+- **Test placement.** The settings-file check of task 3.2 is in `test_hooks.py`; the environment check of task 2.1
+  needed the fake `claude` to record `TEMP`, `TMP`, `TMPDIR`, `HARNESS_TEMP`, `HARNESS_SYSTEM_TEMP`, `HARNESS_REPO`.
 
 ## Risks / Trade-offs
 

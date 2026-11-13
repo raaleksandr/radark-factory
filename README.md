@@ -15,13 +15,36 @@ Tested with Claude Code 2.1.302.
 
 ## How it fits together
 
-- **Teams** — Git repositories, each with its own `CLAUDE.md` and OpenSpec setup.
+- **Teams** — Git repositories, each with its own `CLAUDE.md` and OpenSpec setup (see
+  [Owner-only actions / decisions the team takes](#owner-only-actions--decisions-the-team-takes)).
 - **Hub** — a directory (normally a Git repository) of Markdown handovers, edited only through the `ho` CLI
   from [radark-handover](https://github.com/raaleksandr/radark-handover) (installed with radark-factory).
 - **Dispatcher** (`radark`) — reads `ho inbox --json` for every team, picks the next step, launches Claude Code
   with hooks injected through `--settings`, logs everything to its run directory.
 
 The dispatcher has no model and no credential of its own; agents run on your own Claude Code login.
+
+### Owner-only actions / decisions the team takes
+
+Which decisions a team takes itself and which only the owner takes is each pipeline's own policy, not the engine's.
+Write it into the team's `CLAUDE.md` (or the goal file of a goal run), for example:
+
+```markdown
+## Owner-only actions
+- Publishing a release, pushing to the remote, tagging.
+- Spending money above the agreed limit; credentials and accounts; legal questions.
+
+## Decisions the team takes
+- A choice between technical options the team already recommended.
+- The test strategy, and the order of the team's own work.
+- Inform the owner of such a decision with a non-blocking handover (`--expects ack --auto-close`).
+```
+
+The engine's prompts tell every team to follow it: the apply and act prompts and the product team's triage
+consultation say to decide what the team's instructions allow, record the decision, inform the owner without
+blocking, and stop for the owner (`BLOCKED: owner — …`, a triage verdict `owner`) only for what those instructions
+reserve for the owner — or, where they say nothing, for a decision, money, credentials or a production step. Setting
+a pipeline's policy is the owner's task; without one, behaviour is as before.
 
 ## Quick start
 

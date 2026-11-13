@@ -92,6 +92,12 @@ def matched_keyword(text: str, keywords: list[str]) -> str | None:
     return None
 
 
+def pre_tool_decision(decision: str, reason: str) -> dict:
+    """A PreToolUse hook's `allow` or `deny` with the reason Claude Code shows to the agent."""
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": decision,
+                                   "permissionDecisionReason": reason}}
+
+
 def emit(data: dict) -> None:
     sys.stdout.write(json.dumps(data))  # ASCII: the pipe encoding may not be UTF-8
     sys.stdout.flush()

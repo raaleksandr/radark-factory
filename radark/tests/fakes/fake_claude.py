@@ -26,7 +26,9 @@ if argv == ["--version"]:
 with open(base + ".calls", "a", encoding="utf-8") as fh:
     fh.write(json.dumps({"argv": argv, "cwd": os.getcwd(),
                          "env": {k: os.environ.get(k) for k in ("ANTHROPIC_API_KEY", "HARNESS_TEAM", "HARNESS_HANDOVER",
-                                                                "HARNESS_SESSION", "HARNESS_RUN_ID", "HO_TEAM")}}) + "\n")
+                                                                "HARNESS_SESSION", "HARNESS_RUN_ID", "HO_TEAM", "TEMP", "TMP",
+                                                                "TMPDIR", "HARNESS_TEMP", "HARNESS_SYSTEM_TEMP",
+                                                                "HARNESS_REPO")}}) + "\n")
 counter = base + ".n"
 n = int(open(counter).read()) if os.path.exists(counter) else 0
 open(counter, "w").write(str(n + 1))

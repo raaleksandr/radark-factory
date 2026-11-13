@@ -268,3 +268,55 @@ def test_review_prompt_time_limit_paragraph_verbatim():
     ) in text
     assert "ran into the time limit" not in prompts.phase_prompt(cand("review"))
     assert "ran into the time limit" not in prompts.phase_prompt(cand("review"), time_limits=[])
+
+
+# ---- fewer-owner-waits D6, D9
+
+def test_denial_rule_names_the_temp_dir_and_the_ways():
+    text = prompts.denial_rule("/run/tmp/app")
+    assert "temporary files go to `/run/tmp/app`" in text
+    assert "`git restore -- <file>`" in text and "`Stop-Process -Id <pid>`" in text and "task tool" in text
+    assert "`BLOCKED: owner — denied: <command>; needed for: <why>; suggestion: <what you propose>`" in text
+    assert prompts.parse_blocked("BLOCKED: owner — denied: x; needed for: y; suggestion: z") == (
+        "denied: x; needed for: y; suggestion: z")
+
+
+def test_apply_and_act_prompts_tell_the_team_to_decide_what_its_policy_allows():
+    for c in (cand("apply", change="add-export"), cand("act", team="product", expects="done")):
+        text = prompts.phase_prompt(c)
+        assert "your team's instructions (your `CLAUDE.md`, the owner's goal) allow your team to take, take it" in text
+        assert "`ho new --to <owner team> --expects ack --auto-close`" in text
+        assert "Use the BLOCKED line only for what those instructions reserve for the owner" in text
+        assert text.index(prompts.TEAM_DECIDES) < text.index("`BLOCKED: owner — <what is needed>`")
+
+
+def test_consult_prompt_names_the_team_policy_and_the_note():
+    text = prompts.consult_prompt({"question": "Map or object?"}, "app", "HO-20261016-ab12", "add-export")
+    assert "Decide everything they allow you to decide" in text
+    assert "answer `owner` only for what they reserve for the owner" in text
+    assert "`note_for_owner`" in text and "needs only an acknowledgement" in text
+
+
+def test_verdict_schema_note_is_optional():
+    schema = prompts.VERDICT_SCHEMA
+    assert schema["properties"]["note_for_owner"] == {"type": "string"}
+    assert "note_for_owner" not in schema["required"]
+
+
+def test_verdict_without_or_with_note_parses():
+    from radark.__main__ import parse_verdict
+    from radark.runner import SessionResult
+    r = SessionResult(run_id="r", session_id="s", team="product", handover="H", phase="consult", started="")
+    r.structured = {"verdict": "technical", "answer": "", "reason": "internal"}
+    assert parse_verdict(r) == {"verdict": "technical", "answer": "", "reason": "internal"}
+    r.structured = {**r.structured, "note_for_owner": " FYI "}
+    assert parse_verdict(r)["note_for_owner"] == "FYI"
+
+
+def test_escalation_body_lists_denials_and_a_text_question():
+    body = prompts.escalation_body(team="app", handover="H", reason="permission denied: Bash", phase="apply",
+                                   change=None, question="How should the team go on?", result_tail="",
+                                   session="s", repo="r",
+                                   denied=[{"tool": "Bash", "input": "curl x"}, {"tool": "Write", "input": "{}"}])
+    assert "## Question\n\n> How should the team go on?" in body
+    assert "## Denied\n\n- Bash: `curl x`\n- Write: `{}`" in body

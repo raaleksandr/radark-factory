@@ -309,3 +309,110 @@ def test_blocked_line_after_an_answer_is_ignored(env):
     d = blocked_apply(env, steps=[{"ho": ["respond", P3, "-m", "Answered."]}])
     d.loop(once=True)
     assert not d.state.get(P3)["flags"]["escalated"] and log_events(env, "blocked_on_owner") == []
+
+
+# ---- fewer-owner-waits D8: one clear question for a denial
+
+RM = {"tool_name": "PowerShell", "tool_use_id": "t1", "tool_input": {"command": "Remove-Item C:/cache -Recurse"}}
+SUGGEST = ("BLOCKED: owner — denied: Remove-Item C:/cache -Recurse; needed for: a clean benchmark; suggestion: "
+           "allow it once or run the benchmark without a clean cache")
+
+
+def test_denial_with_blocked_line_gives_one_clear_question(env):
+    d = blocked_apply(env, result=SUGGEST)
+    env.set_claude([{"steps": [START], "result": {"result": f"Ran the free checks.\n{SUGGEST}",
+                                                  "permission_denials": [RM]}}])
+    d.loop(once=True)
+    [call] = new_calls(env)
+    assert "--tag" in call["args"] and "escalation" in call["args"]
+    body = call["stdin"]
+    assert "## Denied" in body and "- PowerShell: `Remove-Item C:/cache -Recurse`" in body
+    question = SUGGEST.split("— ", 1)[1]
+    assert "## Question" in body and f"> {question}" in body
+    rec = d.state.get(P3)
+    assert "permission denied: PowerShell" in rec["reason"] and rec["escalation"]["question"] == question
+
+
+def propose_item(env):
+    env.set_hub({f"show:{A}": show(A), "inbox:app": {"action_required": [item(A)]}})
+    return disp(env)
+
+
+def test_denial_in_propose_without_blocked_line_composes_the_question(env):
+    d = propose_item(env)
+    curl = {"tool_name": "Bash", "tool_input": {"command": "curl https://example.com/spec.json"}}
+    env.set_claude([{"steps": [START], "result": {"result": "Could not fetch the spec.", "permission_denials": [curl]}}])
+    d.loop(once=True)
+    [call] = new_calls(env)
+    body = call["stdin"]
+    assert "- Bash: `curl https://example.com/spec.json`" in body
+    assert ("The permission mode denied Bash `curl https://example.com/spec.json` and the session ended without "
+            "completing the propose phase. How should the team go on?") in body
+    assert d.state.blocked(A) and "permission denied: Bash" in d.state.get(A)["reason"]
+
+
+def test_several_denials_make_one_escalation_listing_all(env):
+    denials = [{"tool_name": "Bash", "tool_input": {"command": f"step {n}"}} for n in (1, 2, 3)]
+    d = blocked_apply(env)
+    env.set_claude([{"steps": [START], "result": {"result": "Stuck.", "permission_denials": denials}}])
+    d.loop(once=True)
+    [call] = new_calls(env)
+    for n in (1, 2, 3):
+        assert f"- Bash: `step {n}`" in call["stdin"]
+    assert len(log_events(env, "escalation")) == 1
+
+
+# ---- fewer-owner-waits D10: the team-decision notice
+
+NOTE = {"verdict": "product", "answer": "use the recommended cache option", "reason": "it is what app recommended",
+        "note_for_owner": "Product picked the recommended cache option for app."}
+
+
+def triage_with(env, verdict, fail_new=False):
+    env.set_hub({"inbox:app": {"action_required": [item(A)]}, f"show:{A}": show(A, [(LATER, "app", "ack", "")]),
+                 **({"new": {"exit": 1, "error": {"code": "io", "message": "hub unwritable"}}} if fail_new else {})})
+    env.set_claude([{"steps": [START, ASK_STEP, stop_step("Waiting for the answer.")], "result": {"result": "Referred."}},
+                    {"steps": [START], "result": {"result": "", "structured_output": verdict}},
+                    {"steps": [START], "result": {"result": "Continued."}}])
+    lines = []
+    d = Dispatcher(env.cfg(), out=lines.append)
+    d.loop(once=True)
+    return d, lines
+
+
+def test_note_for_owner_sends_one_team_decision_notice(env):
+    d, lines = triage_with(env, NOTE)
+    calls = env.claude_calls()
+    assert len(calls) == 3 and "--resume" in calls[2]["argv"]  # the asking session is resumed
+    assert "use the recommended cache option" in calls[2]["argv"][1]
+    [call] = new_calls(env)
+    args = call["args"]
+    assert call["team"] == "product" and args[args.index("--to") + 1] == "owner"
+    assert args[args.index("--expects") + 1] == "ack" and "--auto-close" in args and "--ref" not in args
+    assert args[args.index("--tag") + 1] == "team-decision"
+    assert args[args.index("--title") + 1] == f"product: decided for app on {A}"
+    body = call["stdin"]
+    for text in ("use the recommended cache option", "Product picked the recommended cache option",
+                 "Use a Map or a plain object", "it is what app recommended"):
+        assert text in body
+    assert not d.state.blocked(A)
+    [sent] = log_events(env, "team_decision_sent")
+    assert sent["team"] == "app" and sent["handover"] == A and sent["notice"].startswith("HO-FAKE-")
+
+
+@pytest.mark.parametrize("note", [None, "", "   "])
+def test_no_note_no_notice(env, note):
+    verdict = {"verdict": "technical", "answer": "", "reason": "internal detail"}
+    if note is not None:
+        verdict["note_for_owner"] = note
+    d, lines = triage_with(env, verdict)
+    assert new_calls(env) == [] and len(env.claude_calls()) == 3 and log_events(env, "team_decision_sent") == []
+
+
+def test_failed_notice_is_logged_and_the_session_still_resumed(env):
+    d, lines = triage_with(env, NOTE, fail_new=True)
+    assert len(env.claude_calls()) == 3 and "--resume" in env.claude_calls()[2]["argv"]
+    [failed] = log_events(env, "team_decision_send_failed")
+    assert failed["handover"] == A and "hub unwritable" in failed["error"]
+    assert any("! could not send the team-decision handover" in x for x in lines)
+    assert not d.state.blocked(A)

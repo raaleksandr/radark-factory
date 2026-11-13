@@ -278,7 +278,9 @@ answer in its prompt). The handover closes itself once answered. Agents may also
 (publishing a release, spending, credentials); those are ordinary handovers you answer the same way.
 
 **`BLOCKED: owner`.** The apply and act prompts tell the worker: if it only waits for another team's result, stop
-without committing or commenting just to record that; if only the owner can unblock it (a decision, money,
+without committing or commenting just to record that; if a decision is needed that its team's instructions (its
+`CLAUDE.md`, the owner's goal) allow the team to take, take it, record it, inform the owner with a non-blocking
+handover (`ho new --to <owner team> --expects ack --auto-close`) and continue; if only the owner can unblock it (a decision, money,
 credentials, a production step), end the final message with one line `BLOCKED: owner — <what is needed>` (em dash,
 en dash or hyphen). A work session that ends with such a line and did not complete its phase (the worker's part is
 not `done`, declined or answered) is `waiting_for_owner` and escalated at once with the reason `blocked on the owner:
@@ -344,13 +346,64 @@ escalation.
   the product team to take those entries into its backlog itself and say what it decided when it closes or returns
   the handover (a missing product backlog entry is not a reason to return).
 - **Session:** `claude -p <prompt> --session-id <uuid> --output-format stream-json --verbose --permission-mode auto
-  --permission-prompts none --settings <run_dir>/session-settings.json --append-system-prompt <standing rule>`
-  in the team repository. The settings file adds our hooks in exec form (`python.exe` + script path, no shell);
+  --permission-prompts none --settings <run_dir>/session-settings.json --append-system-prompt <standing rule, long-wait
+  rule, denial rule> --add-dir <run_dir>/tmp/<team>` in the team repository. The settings file adds our hooks in exec form (`python.exe` + script path, no shell);
   team repositories are not edited and the owner's manual sessions are unaffected.
 - **Hooks:** `SessionStart` → `hooks_loaded` marker (missing ⇒ loop stops). `Stop` → a plain-text question with an
   escalation keyword ⇒ escalation; any other question ⇒ referred to product triage; otherwise one "continue"
   nudge (never twice in a row). `PreToolUse:AskUserQuestion` does the same for tool questions (see results:
   the tool is not offered in `-p`, so this is a safeguard). `StopFailure` → `usage_limit` marker.
+  `PreToolUse` on `Bash`, `PowerShell`, `Write`, `Edit` → the guard hook (`guard.py`, see *Routine denials* below).
+- **Routine denials** (change fewer-owner-waits). Routine commands that the permission mode denies used to end a
+  session silently; three kinds now get a way forward.
+  - *Session temp directory.* Every session, new or resumed, gets `<run_dir>/tmp/<team>/` (created if missing) as an
+    extra working directory (`--add-dir`), and `TEMP`, `TMP`, `TMPDIR` point to it. One directory per team, so a
+    resumed session finds its files; the dispatcher never deletes anything in it (it is small and lies in the run
+    directory you manage). The hooks also get `HARNESS_REPO` (the team repository), `HARNESS_TEMP` (that directory)
+    and `HARNESS_SYSTEM_TEMP` (the original `TEMP`/`TMP`/`TMPDIR`).
+  - *Guard hook.* It decides only these cases and prints nothing for anything else, so the permission mode decides
+    every other call exactly as before. An `allow` is given only to a single simple command (no `;`, `&&`, `||`,
+    `|`, `&`, newline, backtick, `$(`, redirection); a compound command can only be denied.
+    - Discarding working-tree edits: `git restore [--worktree] [--staged] [--] <file>…` (also `-W`, `-S`) and
+      `git checkout -- <file>…` are **allowed** when every path is an existing file inside the team repository.
+      Safe because it changes only the uncommitted content of named files of the team's own repository, which the
+      edit tool may already change, and the dispatcher runs one session at a time. `.`, a directory, a wildcard,
+      pathspec magic (`:…`), a path outside the repository or `--source` are **denied** with: "Discarding edits is
+      allowed only for named files of this repository: run `git restore -- <file> [<file>…]` (one command, nothing
+      else on the line), or re-write each file with the edit tool. Whole-tree or out-of-repository discards stay
+      denied." Other options (`-p`, `--ours`, …), a missing file, `git reset`, `git clean` are left to the permission
+      mode.
+    - Stopping processes: `Stop-Process -Id <pid>[,<pid>]`, `taskkill /PID <pid> [/T] [/F]` and `kill [-9] <pid>` are
+      **allowed** when every ID is a process descended from the session's Claude Code process (the hook's parent;
+      a Python launcher in between is skipped). Safe because such a process was started by the session or by a tool
+      it ran. The process table is read once per stop command (`Get-CimInstance Win32_Process` on Windows, `ps`
+      elsewhere; 15 s limit); a child created before its parent is a reused ID, not a descendant. By name or image
+      (`-Name`, `/IM`, `pkill`, `killall`), piped input, a variable ID, a process outside that tree, or a failed
+      table read are **denied** with: "Stop only processes this session started, by their ID: `Stop-Process -Id
+      <pid>` (or `taskkill /PID <pid> /T /F`) is allowed for processes started in this session. Better: start
+      servers as background tasks and stop them with the task tool. Processes by name or not started by this
+      session stay denied."
+    - Temporary files: a `Write`/`Edit` under the system temp directory (`HARNESS_SYSTEM_TEMP` or `/tmp`) and a shell
+      command naming such a path are **denied** with "Temporary files go to `<run_dir>/tmp/<team>/` (it is also
+      `$TEMP`/`$TMP` in this session); write them there." Paths in the session temp directory and the repository are
+      never decided by this rule, also when they lie under the system temp directory.
+
+    Nothing that pushes, publishes, tags, deletes outside the repository and the temp directory or spends money
+    becomes allowed. Every decision is written to the session's markers (`guard`: decision, rule, tool, input). A
+    guard error lets the permission mode decide.
+  - *Denial rule.* Every session's system prompt ends with: "Denied commands: if the permission mode denies a
+    command, do not stop. Do the same another allowed way: temporary files go to `<temp dir>`; to drop an edit, run
+    `git restore -- <file>` naming the files, or re-write them; stop only processes you started, by their ID
+    (`Stop-Process -Id <pid>`), or run servers as background tasks and stop them with the task tool. A hook message
+    on a denial names the allowed way. If the phase cannot be completed without the denied command, end your final
+    message with one line `BLOCKED: owner — denied: <command>; needed for: <why>; suggestion: <what you propose>`."
+  - *One clear question.* A work session that ends on a denial and is escalated (it did not complete its phase)
+    sends exactly one escalation handover, in every work phase: the reason keeps `permission denied: <tool>`, the
+    body has a `## Denied` section (one line `- <tool>: <command or input, up to 200 characters>` per denial), and
+    the question is the session's last `BLOCKED: owner — …` text, or else "The permission mode denied <tool>
+    `<input>` … and the session ended without completing the <phase> phase. How should the team go on?".
+  - Do not keep uncommitted manual work in a team repository while a pipeline runs: an allowed `git restore` of a
+    named file (like the edit tool) would discard it.
 - **Outcome:** `interrupted` (see below) > `usage_limit` > `waiting_for_owner` (escalation or a permission denial) >
   `error` (exit ≠ 0, no result, time limit, no hooks) > `question` > `finished`. A work-item session whose only reason
   to wait for the owner is a permission denial is not escalated when it ended normally (exit 0, a result, hooks
@@ -450,7 +503,15 @@ escalation.
 - **Product triage** (fallback for every question the rules do not settle): a read-only consultation in the
   product repository (`--tools Read,Grep,Glob`, `--json-schema` verdict `technical | product | owner`), then the
   asking session is resumed with the default answer or the product decision. `owner`, a failed or malformed
-  consultation, or more than `max_per_handover` triages ⇒ escalation.
+  consultation, or more than `max_per_handover` triages ⇒ escalation. The consultation prompt tells the product team
+  to decide everything its instructions (its `CLAUDE.md`, the owner's goal) allow it to decide and to answer `owner`
+  only for what they reserve for the owner (or, where they say nothing, what a human must decide). The verdict may
+  carry `note_for_owner`: when it is non-empty after a `technical` or `product` verdict, the dispatcher sends the
+  owner a **team-decision notice** from the triage team — `ho new --to owner --expects ack --auto-close --tag
+  team-decision --title "<triage team>: decided for <team> on <handover>"`, no `--ref`, so it never holds an item —
+  naming the question, the decision, the reason and the note; then `ho sync`. Run log: `team_decision_sent` (team,
+  handover, triage_team, notice) or `team_decision_send_failed` (error; also a `!` console line). The asking session
+  is resumed either way. Acknowledge the notice with `ho ack <ID>` as `owner`.
 - **Escalation handovers** (tag `escalation`, or known from the state) are never work or review items for any team.
 - **Usage guard:** every session stream carries `rate_limit_event` lines with the plan's usage per window
   (`five_hour`, `seven_day`: used share and reset time). The latest reading per window is kept in `state.json`
@@ -497,7 +558,7 @@ escalation link: escalation handover, team, session, phase, reason, question, se
 `meta` (`usage` per window: utilization 0–1, resets_at Unix s, status, seen; `usage_wait` of the current wait:
 until, window, utilization, cause; `backoff_until`, `backoff_minutes`; `running`: the session now running; `unconfigured`: per handover waiting for a
 team that is not set up and already escalated: team, sender, item, escalation, at), `runs.jsonl` (the run log), `sessions/<run-id>.jsonl` (full stream per session), `markers/<run-id>.jsonl`
-(hook markers), `session-settings.json`, `hook-config.json`, `lock`, `PAUSE`, `STOP`, `console.log` (copy of the console of every `run` / `once`), `goal.json` (the current or
+(hook markers), `tmp/<team>/` (session temp directories; never cleaned by the dispatcher), `session-settings.json`, `hook-config.json`, `lock`, `PAUSE`, `STOP`, `console.log` (copy of the console of every `run` / `once`), `goal.json` (the current or
 last goal run, for observability and `note`: path, hash, started, status, sessions and limits, slept_s, empty_continues,
 guidance_pending, given_text — the goal text the product team last received —, last_verdict, last_verdict_at, result), `goal-report-<YYYYMMDD-HHMMSS>.md`.
 
@@ -510,7 +571,8 @@ duration_s), `suspend` (start, end in Unix s, seconds, during: team,
 handover, phase of the running session or null), `interrupted` (team, handover, phase, session, cause
 `dispatcher_stopped`, resumed), `stale_index_lock` (path), `auto_answer`, `question`, `nudge`, `escalation`, `denial`,
 `denial_not_escalated` (team, handover, phase, session, denials: tool, input shortened to 200 characters, phase,
-session, at), `triage` (verdict, consult_session), `limit_check_start` (team, check_team, handover, session, elapsed_s,
+session, at), `triage` (verdict, consult_session), `team_decision_sent` (team, handover, triage_team, notice),
+`team_decision_send_failed` (team, handover, triage_team, error), `limit_check_start` (team, check_team, handover, session, elapsed_s,
 checks_used), `limit_check` (team, check_team, handover, session, check_session, outcome, verdict
 `progressing | hung` or null, reason, extension_min, duration_s, ignored, stream), `propose_without_change` (team, handover, outcome, session), `no_progress`, `stalled`, `escalation_sent` (escalation handover ID),
 `escalation_send_failed` (error), `owner_answer` (action `respond | decline`, answer, session), `unconfigured_team`

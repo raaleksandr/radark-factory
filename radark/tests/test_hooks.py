@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from radark import runner as runner_mod
+
 HOOKS = Path(__file__).resolve().parents[1] / "hooks"
 CFG = {"default_answer": "DEFAULT ANSWER", "escalation_keywords": ["push", "deploy", "delete"],
        "triage_teams": ["app", "backend"]}
@@ -161,3 +163,15 @@ def test_rate_limit_failure(run_dir):
     hook("stop_failure.py", {"hook_event_name": "StopFailure", "error": "rate_limit"}, run_dir)
     hook("stop_failure.py", {"hook_event_name": "StopFailure", "error": "server_error"}, run_dir)
     assert [m["event"] for m in markers(run_dir)] == ["usage_limit", "error"]
+
+
+# ---- guard hook registration (fewer-owner-waits task 3.2)
+
+def test_guard_hook_registered_for_shell_and_file_tools(env):
+    settings = json.loads(runner_mod.Runner(env.cfg()).settings_path.read_text())
+    pre = settings["hooks"]["PreToolUse"]
+    assert pre[0]["matcher"] == "AskUserQuestion"
+    guarded = {g["matcher"]: g["hooks"][0] for g in pre[1:]}
+    assert set(guarded) == {"Bash", "PowerShell", "Write", "Edit"}
+    for h in guarded.values():
+        assert h["type"] == "command" and h["args"][0].endswith("guard.py") and len(h["args"]) == 1

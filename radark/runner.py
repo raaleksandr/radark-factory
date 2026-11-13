@@ -14,13 +14,15 @@ from pathlib import Path
 
 from . import clock
 from .config import Config
-from .prompts import STANDING_RULE, long_wait_rule
+from .prompts import STANDING_RULE, denial_rule, long_wait_rule
 from .state import now_ts, write_json_atomic
 
 HOOKS_DIR = Path(__file__).resolve().parent / "hooks"
 OUR_TOOLS = {"AskUserQuestion"}  # denied by our own hook; recorded through markers, not as owner denials
 RECENT_EVENTS = 40  # events kept for the limit check's digest (check-session-at-time-limit D3)
 TEXT_CHARS, TOOL_CHARS = 300, 150
+GUARDED_TOOLS = ("Bash", "PowerShell", "Write", "Edit")  # the guard hook's matchers (fewer-owner-waits D1)
+TEMP_VARS = ("TEMP", "TMP", "TMPDIR")  # point to the session temp directory (fewer-owner-waits D5)
 WRAP_UP = "wrap_up"  # `on_deadline` answer: stop the session and resume it with a wrap-up prompt (wrap-up W3)
 
 
@@ -74,7 +76,8 @@ def write_session_settings(cfg: Config) -> Path:
 
     settings = {"hooks": {
         "SessionStart": [{"hooks": [entry("session_start.py")]}],
-        "PreToolUse": [{"matcher": "AskUserQuestion", "hooks": [entry("ask_user_question.py")]}],
+        "PreToolUse": [{"matcher": "AskUserQuestion", "hooks": [entry("ask_user_question.py")]}]
+                      + [{"matcher": tool, "hooks": [entry("guard.py")]} for tool in GUARDED_TOOLS],
         "Stop": [{"hooks": [entry("stop.py")]}],
         "StopFailure": [{"hooks": [entry("stop_failure.py")]}],
     }}
@@ -88,8 +91,15 @@ def write_session_settings(cfg: Config) -> Path:
     return path
 
 
+def session_temp_dir(cfg: Config, team: str) -> Path:
+    """`<run_dir>/tmp/<team>/`, created if missing; the dispatcher never deletes files in it (fewer-owner-waits D5)."""
+    path = Path(cfg.run_dir) / "tmp" / team
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def session_env(base: dict, cfg: Config, team: str, handover: str | None, session_id: str, run_id: str,
-                phase: str = "") -> dict:
+                phase: str = "", temp_dir: Path | None = None) -> dict:
     env = dict(base)
     env.pop("ANTHROPIC_API_KEY", None)  # a stray key would switch the agents to API billing
     env.pop("ANTHROPIC_AUTH_TOKEN", None)
@@ -103,6 +113,12 @@ def session_env(base: dict, cfg: Config, team: str, handover: str | None, sessio
         "HO_HUB": str(cfg.hub),
         "HO_TEAM": team,
     })
+    if temp_dir is not None:  # fewer-owner-waits D5, D7: hooks see the original temp dirs and the repository
+        system = [base[k] for k in TEMP_VARS if base.get(k)]
+        env["HARNESS_SYSTEM_TEMP"] = os.pathsep.join(dict.fromkeys(system))
+        env["HARNESS_TEMP"] = str(temp_dir)
+        env["HARNESS_REPO"] = str(cfg.team(team).repo)
+        env.update({k: str(temp_dir) for k in TEMP_VARS})
     return env
 
 
@@ -151,7 +167,7 @@ class Runner:
         self.settings_path = write_session_settings(cfg)
 
     def command(self, prompt: str, session_id: str, resume: bool = False, tools: list[str] | None = None,
-                json_schema: dict | None = None) -> list[str]:
+                json_schema: dict | None = None, temp_dir: Path | None = None) -> list[str]:
         cmd = list(self.cfg.claude) + ["-p", prompt]
         cmd += ["--resume", session_id] if resume else ["--session-id", session_id]
         cmd += [
@@ -159,13 +175,20 @@ class Runner:
             "--permission-mode", self.cfg.permission_mode,
             "--permission-prompts", "none",
             "--settings", str(self.settings_path),
-            "--append-system-prompt", STANDING_RULE + "\n\n" + long_wait_rule(self.cfg.session_idle_minutes),
+            "--append-system-prompt", self.system_prompt(temp_dir),
         ]
+        if temp_dir is not None:
+            cmd += ["--add-dir", str(temp_dir)]
         if tools is not None:
             cmd += ["--tools", ",".join(tools), "--allowedTools", ",".join(tools)]
         if json_schema is not None:
             cmd += ["--json-schema", json.dumps(json_schema)]
         return cmd + list(self.cfg.extra_args)
+
+    def system_prompt(self, temp_dir: Path | None) -> str:
+        """Standing rule, long-wait rule and, with a session temp dir, the denial rule (fewer-owner-waits D6)."""
+        text = STANDING_RULE + "\n\n" + long_wait_rule(self.cfg.session_idle_minutes)
+        return text + ("\n\n" + denial_rule(str(temp_dir)) if temp_dir is not None else "")
 
     def kill(self) -> None:
         self.kill_requested = True
@@ -191,8 +214,10 @@ class Runner:
                           phase=phase, started=now_ts())
         stream_path = self.cfg.run_dir / "sessions" / f"{run_id}.jsonl"
         r.stream_path = str(stream_path)
-        cmd = self.command(prompt, session_id, resume=bool(resume), tools=tools, json_schema=json_schema)
-        env = session_env(os.environ, self.cfg, team, handover, session_id, run_id, phase)
+        temp_dir = session_temp_dir(self.cfg, team)
+        cmd = self.command(prompt, session_id, resume=bool(resume), tools=tools, json_schema=json_schema,
+                           temp_dir=temp_dir)
+        env = session_env(os.environ, self.cfg, team, handover, session_id, run_id, phase, temp_dir)
         flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0  # our Ctrl+C is handled by us
         now = self.clock
         t0 = now()

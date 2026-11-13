@@ -29,13 +29,36 @@ def long_wait_rule(idle_minutes: float) -> str:
     )
 
 
-CHANGE_LINE_RE = re.compile(r"^\s*CHANGE:\s*`?([A-Za-z0-9._-]+)`?\s*$", re.M)
+def denial_rule(temp_dir: str) -> str:
+    """The denial rule every session carries in its system prompt after the long-wait rule (fewer-owner-waits D6)."""
+    return (
+        "Denied commands: if the permission mode denies a command, do not stop. Do the same another allowed way: "
+        f"temporary files go to `{temp_dir}`; to drop an edit, run `git restore -- <file>` naming the files, or "
+        "re-write them; stop only processes you started, by their ID (`Stop-Process -Id <pid>`), or run servers as "
+        "background tasks and stop them with the task tool. A hook message on a denial names the allowed way. If the "
+        "phase cannot be completed without the denied command, end your final message with one line "
+        "`BLOCKED: owner — denied: <command>; needed for: <why>; suggestion: <what you propose>`."
+    )
+
+
+CHANGE_LINE_RE =re.compile(r"^\s*CHANGE:\s*`?([A-Za-z0-9._-]+)`?\s*$", re.M)
 BLOCKED_LINE_RE = re.compile(r"^[ \t]*BLOCKED:[ \t]*owner[ \t]*[—–-][ \t]*(.+?)[ \t]*$", re.M | re.I)
+
+TEAM_DECIDES = (
+    "If a decision is needed that your team's instructions (your `CLAUDE.md`, the owner's goal) allow your team to "
+    "take, take it: record it in the change (or the handover result) and inform the owner with a non-blocking "
+    "handover (`ho new --to <owner team> --expects ack --auto-close`), then continue. Use the BLOCKED line only for "
+    "what those instructions reserve for the owner or, where they say nothing, for a decision, money, credentials, a "
+    "production step."
+)
 
 # apply and act (no-loop N3, N4): how a worker that cannot go on ends, instead of re-checking every session
 BLOCKED_NOTE = (
     "If you only wait for another team's result, stop; do not commit or comment just to record that you are still "
-    "waiting. If only the owner can unblock you (a decision, money, credentials, a production step), end your final "
+    "waiting. "
+    # fewer-owner-waits D9: decide what the team's own policy allows, inform the owner without blocking
+    + TEAM_DECIDES +
+    " If only the owner can unblock you (a decision, money, credentials, a production step), end your final "
     "message with one line `BLOCKED: owner — <what is needed>`."
 )
 
@@ -289,6 +312,7 @@ VERDICT_SCHEMA = {
         "verdict": {"type": "string", "enum": ["technical", "product", "owner"]},
         "answer": {"type": "string"},
         "reason": {"type": "string"},
+        "note_for_owner": {"type": "string"},  # optional (fewer-owner-waits D9, D10)
     },
     "required": ["verdict", "answer", "reason"],
     "additionalProperties": False,
@@ -306,8 +330,40 @@ def consult_prompt(question: dict, team: str, handover: str, change: str | None,
         "Return your verdict:\n"
         "- `technical`: it cannot affect them; the team chooses the best variant itself (answer may be empty);\n"
         "- `product`: it can; give the answer you choose and the reason;\n"
-        "- `owner`: a human must decide (for example pricing, spending money, legal); give the reason."
+        "- `owner`: a human must decide (for example pricing, spending money, legal); give the reason.\n\n"
+        + CONSULT_POLICY
     ) + ("\n\n" + goal_block(goal) if goal else "")
+
+
+# consultation (fewer-owner-waits D9): the product team decides what its own policy allows
+CONSULT_POLICY = (
+    "Your team's instructions (its `CLAUDE.md`, the owner's goal) may say which decisions your team takes and which "
+    "are reserved for the owner. Decide everything they allow you to decide (`technical` or `product`), and answer "
+    "`owner` only for what they reserve for the owner or, where they say nothing, for what a human must decide. When "
+    "you decide something the owner should know about, put a short note in `note_for_owner`; the dispatcher sends it "
+    "to the owner as a handover that needs only an acknowledgement. Otherwise leave it empty."
+)
+
+
+def team_decision_title(triage_team: str, team: str, handover: str) -> str:
+    return f"{triage_team}: decided for {team} on {handover}"
+
+
+def team_decision_body(*, triage_team: str, team: str, handover: str, question, verdict: dict) -> str:
+    """The non-blocking notice to the owner about a decision the triage team took (fewer-owner-waits D10)."""
+    decision = verdict["answer"].strip() or "the team chooses the best variant itself"
+    lines = [
+        f"Team `{triage_team}` decided a question of team `{team}` on {handover} itself, as its instructions allow. "
+        "Nothing waits for you; acknowledge it with `ho ack <this ID>`.",
+        "",
+        f"- Verdict: {verdict['verdict']}",
+        f"- Decision: {decision}",
+        f"- Reason: {verdict['reason']}",
+        "", "## Note for the owner", "", _quote(verdict.get("note_for_owner") or ""),
+        "", "## Question", "", "```json", json.dumps(question, indent=2, ensure_ascii=False), "```",
+        "", "If you disagree, send the team a handover with your decision.",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 # ---- limit check at the maximum duration (check-session-at-time-limit D3, D4)
@@ -440,7 +496,9 @@ def escalation_title(team: str, reason: str) -> str:
 
 
 def escalation_body(*, team: str, handover: str, reason: str, phase: str | None, change: str | None,
-                    question, result_tail: str, session: str | None, repo: str) -> str:
+                    question, result_tail: str, session: str | None, repo: str,
+                    denied: list[dict] | None = None) -> str:
+    """`denied`: the session's denials as `denial_entry` dicts, listed under `## Denied` (fewer-owner-waits D8)."""
     lines = [
         f"The dispatcher stopped work on {handover} for team `{team}` and needs your decision.",
         "",
@@ -449,8 +507,12 @@ def escalation_body(*, team: str, handover: str, reason: str, phase: str | None,
         + (f", OpenSpec change `{change}`" if change else ""),
         f"- Session: `{session or '-'}`",
     ]
-    if question:
+    if isinstance(question, str) and question.strip():  # a text question (a denial, fewer-owner-waits D8)
+        lines += ["", "## Question", "", _quote(question)]
+    elif question:
         lines += ["", "## Question", "", "```json", json.dumps(question, indent=2, ensure_ascii=False), "```"]
+    if denied:
+        lines += ["", "## Denied", ""] + [f"- {d.get('tool')}: `{d.get('input')}`" for d in denied]
     if result_tail.strip():
         lines += ["", "## What the session reported last", "", _quote(result_tail)]
     lines += [

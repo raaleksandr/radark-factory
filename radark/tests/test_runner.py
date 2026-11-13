@@ -372,10 +372,40 @@ def system_prompt(env, idle=None, **kw):
 
 
 def test_long_wait_rule_in_every_session_system_prompt(env):
-    from radark.prompts import STANDING_RULE, long_wait_rule
+    from radark.prompts import STANDING_RULE, denial_rule, long_wait_rule
     for kw in ({}, {"resume": "sess-abc"}):
         text = system_prompt(env, **kw)
-        assert text == STANDING_RULE + "\n\n" + long_wait_rule(20)
+        temp = env.cfg().run_dir / "tmp" / "app"
+        assert text == STANDING_RULE + "\n\n" + long_wait_rule(20) + "\n\n" + denial_rule(str(temp))
         assert "ended after 20 minutes" in text and "every 10 minutes" in text
         text = system_prompt(env, idle=30.0, **kw)
         assert STANDING_RULE in text and "ended after 30 minutes" in text and "every 15 minutes" in text
+
+
+# ---- session temp directory and denial rule (fewer-owner-waits D5-D7)
+
+def test_session_temp_dir_add_dir_and_environment(env, monkeypatch):
+    system = str(env.root / "systemp")
+    monkeypatch.setenv("TEMP", system)
+    monkeypatch.setenv("TMP", system)
+    monkeypatch.delenv("TMPDIR", raising=False)
+    for team, kw in (("app", {}), ("backend", {"resume": "sess-abc"})):
+        env.set_claude([{"steps": [START], "result": {}}])
+        Runner(env.cfg()).run(team, "do it", phase="apply", **kw)
+        call = env.claude_calls()[-1]
+        temp = env.cfg().run_dir / "tmp" / team
+        assert temp.is_dir()
+        argv = call["argv"]
+        assert argv[argv.index("--add-dir") + 1] == str(temp)
+        e = call["env"]
+        assert e["TEMP"] == e["TMP"] == e["TMPDIR"] == e["HARNESS_TEMP"] == str(temp)
+        assert e["HARNESS_SYSTEM_TEMP"] == system
+        assert e["HARNESS_REPO"] == str(env.cfg().team(team).repo)
+
+
+def test_denial_rule_names_the_team_temp_dir_and_blocked_format(env):
+    text = system_prompt(env)
+    assert str(env.cfg().run_dir / "tmp" / "app") in text
+    assert "`BLOCKED: owner — denied: <command>; needed for: <why>; suggestion: <what you propose>`" in text
+    assert text.index("Long waits:") < text.index("Denied commands:")
+
