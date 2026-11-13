@@ -11,7 +11,7 @@ import pytest
 import radark.__main__ as hm
 from radark import config as config_mod
 from radark.__main__ import Dispatcher, keep_awake_text, main
-from radark.awake import KeepAwake, Keeper, parse_keep_awake, wanted
+from radark.awake import KeepAwake, Keeper, cover_end_time, parse_keep_awake, wanted
 from radark.tests.conftest import START, item, show
 
 A = "HO-20261016-aaaa"
@@ -390,3 +390,104 @@ def test_dry_run_without_the_option(env, capsys):
     with_task(env)
     assert run(env, "dry-run") == 0
     assert "keep awake" not in capsys.readouterr().out.lower()
+
+
+# ---- a moment covered by the end time (keep-awake-covers-until)
+
+NOON = at(29, 12)
+COVERED = cover_end_time(parse_keep_awake("12:00", at(29, 9)), NOON.timestamp())
+
+
+@pytest.mark.parametrize("text, until, mode", [
+    ("12:00", NOON, "on"),  # equal moment: the whole run
+    ("13:00", NOON, "on"),  # later moment: the whole run
+    ("07:00", NOON, "until"),  # earlier moment: unchanged
+    ("12:00", None, "until"),  # no end time: unchanged
+    ("08:00-23:00", NOON, "range"),
+    ("on", NOON, "on"),
+    ("off", NOON, "off"),
+])
+def test_cover_end_time(text, until, mode):
+    setting = parse_keep_awake(text, at(29, 6))
+    covered = cover_end_time(setting, None if until is None else until.timestamp())
+    assert covered.mode == mode
+    if setting.mode == "until" and mode == "on":
+        assert covered == KeepAwake("on", text=text, given=setting.until)
+    else:
+        assert covered == setting
+
+
+@pytest.mark.parametrize("now, until, ends", [
+    (at(29, 9), NOON, "12:00"),
+    (at(28, 22), NOON, "12:00 tomorrow"),
+    (at(25, 22), NOON, "12:00 on 2026-10-29"),
+])
+def test_covered_text(now, until, ends):
+    assert keep_awake_text(COVERED, now.timestamp(), until=until.timestamp()) ==         f"whole run (until 12:00 given, the run ends at {ends})"
+
+
+def test_covered_start_line_and_record(env, fake_keeper):
+    ends = dt.datetime.now().replace(second=0, microsecond=0) + dt.timedelta(hours=2)
+    setting = cover_end_time(KeepAwake("until", until=ends, text="12:00"), ends.timestamp())
+    lines = []
+    d = Dispatcher(env.cfg(), out=lines.append)
+    d.until, d.keep_awake = ends.timestamp(), setting
+    d.start_keep_awake()
+    d.stop_keep_awake()
+    assert lines == [f"Keep awake: whole run (until 12:00 given, the run ends at "
+                     f"{hm.day_clock(ends.timestamp(), time.time())})"]
+    rec = log_events(env, "keep_awake_setting")[0]
+    assert rec["mode"] == "on" and rec["text"] == "12:00" and rec["until"] == ends.isoformat(timespec="minutes")
+    assert fake_keeper[0].setting.mode == "on"
+
+
+def test_dry_run_covered(env, capsys):
+    with_task(env)
+    ends = (dt.datetime.now() + dt.timedelta(hours=2)).strftime("%Y-%m-%d %H:%M")
+    assert run(env, "dry-run", "--until", ends, "--keep-awake", ends) == 0
+    out = capsys.readouterr().out
+    assert f"Would keep awake: whole run (until {ends} given, the run ends at " in out
+    assert env.claude_calls() == []
+
+
+def test_dry_run_earlier_moment_unchanged(env, capsys):
+    with_task(env)
+    soon = dt.datetime.now() + dt.timedelta(hours=1)
+    ends = soon + dt.timedelta(hours=1)
+    assert run(env, "dry-run", "--until", f"{ends:%Y-%m-%d %H:%M}", "--keep-awake", f"{soon:%Y-%m-%d %H:%M}") == 0
+    assert "Would keep awake: until " in capsys.readouterr().out
+
+
+def test_run_covered_goes_to_the_keeper(env, fake_keeper):
+    ends = (dt.datetime.now() + dt.timedelta(hours=2)).strftime("%Y-%m-%d %H:%M")
+    assert run(env, "run", "--once", "--until", ends, "--keep-awake", ends) == 0
+    assert fake_keeper[0].setting.mode == "on" and fake_keeper[0].setting.text == ends
+    assert log_events(env, "keep_awake_setting")[0]["mode"] == "on"
+
+
+def test_session_past_the_moment_stays_awake(env, monkeypatch):
+    """End time and keep-awake moment equal; the keeper's clock is past that moment while a session still runs: the
+    computer stays awake until the run ends and no "Keep awake ended" line is printed."""
+    with_task(env)
+    env.set_claude([{"steps": [START, {"sleep": 1}], "result": {}}])
+    ends = dt.datetime.now().replace(second=0, microsecond=0) + dt.timedelta(hours=1)
+    f = Fake(ends + dt.timedelta(minutes=10))  # the keeper sees a time after the end time
+    keepers = []
+
+    def keeper(setting):
+        keepers.append(Keeper(setting, set_state=f.set_state, now=f.now, interval=0.01))
+        return keepers[-1]
+    monkeypatch.setattr(hm, "Keeper", keeper)
+    monkeypatch.setattr(hm.os, "name", "nt")
+    lines = []
+    d = Dispatcher(env.cfg(), out=lines.append)
+    d.until = ends.timestamp()
+    d.keep_awake = cover_end_time(KeepAwake("until", until=ends, text=f"{ends:%H:%M}"), d.until)
+    d.start_keep_awake()
+    try:
+        assert d.loop(once=True) == 0
+    finally:
+        d.stop_keep_awake()
+    assert log_events(env, "session_end")
+    assert f.calls == [True, False]  # on at the start, released only when the run ends
+    assert not any("Keep awake ended" in x for x in lines) and log_events(env, "keep_awake") == []

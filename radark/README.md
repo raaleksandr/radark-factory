@@ -78,7 +78,9 @@ removed) or `<run_dir>/STOP` (exit cleanly between sessions). To stop at a time 
 if it has passed or is the current minute), `YYYY-MM-DD HH:MM` (or `YYYY-MM-DDTHH:MM`) a full date and time; local
 wall-clock time, so time the computer sleeps counts (unlike `--max-hours`, which counts awake time). From that moment
 no new step starts and the run ends (exit 0; a goal run ends with `limit`); a session running at that moment finishes
-first, which can be up to `session_max_minutes` later (a work session extended by its limit checks: longer). Waits without a session (idle poll, `PAUSE`, usage wait,
+first, which can be up to `session_max_minutes` later (a work session extended by its limit checks: longer). For
+"work until 12:00 without sleep" use `run --until 12:00 --keep-awake`: it keeps the computer awake until the run
+really ends, including that session (see **Keep awake**). Waits without a session (idle poll, `PAUSE`, usage wait,
 back-off) end at the moment. The start line says `Run ends at 07:00 tomorrow (2026-10-30), in 8 h 50 min`
 (`run_until` in `runs.jsonl`; the end logs `run_until_reached`). The end time applies to that one run and is not
 stored. An unreadable value or a full date and time in the past is refused (exit 2) before any session. To check:
@@ -93,7 +95,10 @@ power plan says (a session it interrupts is resumed after the wake). `--keep-awa
 or the bare flag (the whole run), `HH:MM` / `YYYY-MM-DD HH:MM` (from the start until that moment, the same forms as
 `--until`; after it the computer may sleep while the run goes on), or a daily range `HH:MM-HH:MM` such as
 `08:00-23:00` (a range whose end is earlier than its start crosses midnight: `22:00-02:00`). `[loop] keep_awake` sets
-the default (`off`, `on` or a range); the option replaces it. A range is checked every 30 s, so keeping awake starts
+the default (`off`, `on` or a range); the option replaces it. With an end time (`--until`), a moment at or after it
+means the whole run: `--until 12:00 --keep-awake 12:00` (or `13:00`) keeps the computer awake until the run really
+ends, including a session that finishes after 12:00, the same as the bare flag; a moment before the end time keeps its
+meaning (the computer may sleep after it while the run goes on). A range is checked every 30 s, so keeping awake starts
 and stops within 30 s of an edge; the dispatcher cannot wake a sleeping computer, so a range that starts during a sleep
 takes effect after the next wake. Only idle sleep is blocked: Sleep in the Start menu, the power button, the lid action
 and a low battery still put the computer to sleep. To keep working with the lid closed, set "When I close the lid" to
@@ -112,11 +117,14 @@ against it and all failed (change harness-survive-sleep, D1).
 
 The setting ends with the run (end of the work, a limit, `STOP`,
 Ctrl+C, a closed window: Windows drops the request with the process) and is not stored. The start line says
-`Keep awake: whole run`, `Keep awake: until 23:00 today, in 9 h 00 min` or `Keep awake: daily 08:00-23:00 (now: on)`
-(`keep_awake_setting` in `runs.jsonl`; a goal run's `goal_start` records `keep_awake`); each change during the run
+`Keep awake: whole run`, `Keep awake: until 23:00 today, in 9 h 00 min`, `Keep awake: daily 08:00-23:00 (now: on)`
+or, for a moment covered by the end time, `Keep awake: whole run (until 12:00 given, the run ends at 12:00)` (an end
+on a later day reads `12:00 tomorrow` or `12:00 on 2026-11-20`)
+(`keep_awake_setting` in `runs.jsonl`, with `mode` `on` and the given moment in `until` for the last one; a goal run's `goal_start` records `keep_awake`); each change during the run
 prints `23:00  Keep awake ended; the computer may sleep.` or `08:00  Keep awake started.` and logs `keep_awake`.
 `python -m radark dry-run --keep-awake 08:00-23:00` prints `Would keep awake: daily 08:00-23:00 (now: off, from
-08:00)` outside the range. An unreadable value is refused (exit 2) before any session. On a system other than
+08:00)` outside the range; `dry-run --until 12:00 --keep-awake 12:00` prints `Would keep awake: whole run (until
+12:00 given, the run ends at 12:00)`. An unreadable value is refused (exit 2) before any session. On a system other than
 Windows the run prints `! keeping the computer awake is not available on this system` and goes on.
 
 ## Running in a visible console (with Claude Code watching)

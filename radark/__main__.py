@@ -20,7 +20,7 @@ from . import config as config_mod
 from . import forecast
 from . import prompts
 from . import select as sel
-from .awake import FORMS as KEEP_AWAKE_FORMS, KeepAwake, Keeper, parse_keep_awake, wanted
+from .awake import FORMS as KEEP_AWAKE_FORMS, KeepAwake, Keeper, cover_end_time, parse_keep_awake, wanted
 from .clock import Sleep, SleepWatch, parse_until
 from .hub import Hub, HoError
 from .runner import Runner, SessionResult, kill_pid_tree
@@ -1206,13 +1206,14 @@ class Dispatcher:
         s = self.keep_awake
         if s.mode == "off":
             return
+        moment = s.until or s.given
         self.log.write("keep_awake_setting", mode=s.mode, text=s.text,
-                       until=s.until.isoformat(timespec="minutes") if s.until else None,
+                       until=moment.isoformat(timespec="minutes") if moment else None,
                        start=f"{s.start:%H:%M}" if s.start else None, end=f"{s.end:%H:%M}" if s.end else None)
         if os.name != "nt":
             self.problem("keeping the computer awake is not available on this system")
             return
-        self.out(f"Keep awake: {keep_awake_text(s)}")
+        self.out(f"Keep awake: {keep_awake_text(s, until=self.until)}")
         self.keeper = Keeper(s)
         self.keeper.start()
 
@@ -1401,9 +1402,13 @@ def stamp(ts: float | None = None) -> str:
     return t.strftime("%H:%M") if t.date() == dt.date.today() else t.strftime("%d.%m %H:%M")
 
 
-def keep_awake_text(s: KeepAwake, now: float | None = None) -> str:
-    """`whole run`, `until 23:00 today, in 9 h 00 min`, `daily 08:00-23:00 (now: off, from 08:00)` (design D7)."""
+def keep_awake_text(s: KeepAwake, now: float | None = None, until: float | None = None) -> str:
+    """`whole run`, `until 23:00 today, in 9 h 00 min`, `daily 08:00-23:00 (now: off, from 08:00)` (design D7);
+    `whole run (until 12:00 given, the run ends at 12:00)` for a moment covered by the end time `until`
+    (keep-awake-covers-until D2)."""
     now = time.time() if now is None else now
+    if s.mode == "on" and s.given is not None and until is not None:
+        return f"whole run (until {s.text} given, the run ends at {day_clock(until, now)})"
     if s.mode == "until":
         return f"until {until_text(s.until.timestamp(), now)}"
     if s.mode == "range":
@@ -1414,6 +1419,13 @@ def keep_awake_text(s: KeepAwake, now: float | None = None) -> str:
 
 def local_iso(ts: float | None) -> str | None:
     return None if ts is None else dt.datetime.fromtimestamp(ts).isoformat(timespec="minutes")
+
+
+def day_clock(ts: float, now: float) -> str:
+    """`12:00`, `12:00 tomorrow` or `12:00 on 2026-11-20` (keep-awake-covers-until D2)."""
+    at, today = dt.datetime.fromtimestamp(ts), dt.datetime.fromtimestamp(now).date()
+    day = {today: "", today + dt.timedelta(days=1): " tomorrow"}.get(at.date(), f" on {at:%Y-%m-%d}")
+    return f"{at:%H:%M}{day}"
 
 
 def until_text(ts: float, now: float | None = None) -> str:
@@ -1875,7 +1887,7 @@ def dry_run(d: Dispatcher) -> int:
     if d.until is not None:
         print(f"Would end: {until_text(d.until)}")
     if d.keep_awake.mode != "off":
-        print(f"Would keep awake: {keep_awake_text(d.keep_awake)}")
+        print(f"Would keep awake: {keep_awake_text(d.keep_awake, until=d.until)}")
     owner = d.cfg.owner_team
     answers = d.owner_answers()
     answered = {hid for hid, *_ in answers}
@@ -2076,6 +2088,7 @@ def main(argv=None) -> int:
     d.until = until
     if keep_awake is not None:
         d.keep_awake = keep_awake
+    d.keep_awake = cover_end_time(d.keep_awake, until)  # a moment at or after the end time: the whole run
     goal = None
     if args.command in ("run", "plan") and args.goal:
         goal, error = new_goal(d, args)

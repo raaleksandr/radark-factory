@@ -41,8 +41,10 @@ Alternatives:
 
 ### D2. Reporting
 
-`keep_awake_text` gives `whole run (until 12:00 given, the run ends at 12:00)` for a replaced setting (both times
-formatted like the existing `until` text). The `keep_awake_setting` log record has `mode: "on"`, `text` as given on
+`keep_awake_text` gives `whole run (until 12:00 given, the run ends at 12:00)` for a replaced setting: the given
+moment as typed on the command line, the end time as `HH:MM` when it is today, `HH:MM tomorrow` or
+`HH:MM on YYYY-MM-DD` otherwise (helper `day_clock`). The end time is passed in (`keep_awake_text(s, until=...)`), so
+`KeepAwake` gets only the one new field `given`. The `keep_awake_setting` log record has `mode: "on"`, `text` as given on
 the command line and `until` as the given moment (so the record says both what was given and what applies). A goal
 run's `goal_start.keep_awake` keeps the given text. `dry-run` prints the same text after `Would keep awake: `.
 
@@ -65,6 +67,10 @@ touching this rule.
 - The product draft's decisions are kept; checked against the current code (`main()` parses both options in one place
   for every command, `KeepAwake.mode` already has `on`), none needed changing. Only paths, commands and the neutral
   "Why" were updated.
+- Apply: the draft said both times are "formatted like the existing `until` text", which would add `in 13 h 15 min`
+  and contradict the exact start line the handover asks for. The given moment is shown as typed and the end time as a
+  short clock with its day (`12:00`, `12:00 tomorrow`, `12:00 on 2026-11-20`): in a typical overnight run the end is
+  tomorrow, and the console's `DD.MM HH:MM` stamp (`14.11 12:00`) read poorly in a sentence.
 
 ## Risks / Trade-offs
 

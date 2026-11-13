@@ -6,7 +6,7 @@ import datetime as dt
 import queue
 import re
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .clock import parse_until
 
@@ -24,6 +24,7 @@ class KeepAwake:
     start: dt.time | None = None  # mode range; end < start crosses midnight
     end: dt.time | None = None
     text: str = "off"  # as given, for `goal_start`
+    given: dt.datetime | None = None  # mode on: the moment given, covered by the run's end time (reporting only)
 
 
 def parse_keep_awake(text: str, now: dt.datetime) -> KeepAwake | None:
@@ -41,6 +42,14 @@ def parse_keep_awake(text: str, now: dt.datetime) -> KeepAwake | None:
         return None if start == end else KeepAwake("range", start=start, end=end, text=f"{start:%H:%M}-{end:%H:%M}")
     at = parse_until(text, now)
     return None if at is None else KeepAwake("until", until=at, text=text)
+
+
+def cover_end_time(setting: KeepAwake, until: float | None) -> KeepAwake:
+    """A moment at or after the run's end time (epoch seconds) becomes the whole run, keeping the given moment for
+    reporting; anything else is returned unchanged (keep-awake-covers-until D1)."""
+    if until is None or setting.mode != "until" or setting.until.timestamp() < until:
+        return setting
+    return replace(setting, mode="on", until=None, given=setting.until)
 
 
 def wanted(setting: KeepAwake, now: dt.datetime) -> bool:
