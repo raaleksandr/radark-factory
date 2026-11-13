@@ -14,7 +14,7 @@ from pathlib import Path
 
 from . import clock
 from .config import Config
-from .prompts import STANDING_RULE
+from .prompts import STANDING_RULE, long_wait_rule
 from .state import now_ts, write_json_atomic
 
 HOOKS_DIR = Path(__file__).resolve().parent / "hooks"
@@ -157,7 +157,7 @@ class Runner:
             "--permission-mode", self.cfg.permission_mode,
             "--permission-prompts", "none",
             "--settings", str(self.settings_path),
-            "--append-system-prompt", STANDING_RULE,
+            "--append-system-prompt", STANDING_RULE + "\n\n" + long_wait_rule(self.cfg.session_idle_minutes),
         ]
         if tools is not None:
             cmd += ["--tools", ",".join(tools), "--allowedTools", ",".join(tools)]

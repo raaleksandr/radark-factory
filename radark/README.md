@@ -349,6 +349,13 @@ escalation.
   night's sleep ends no session. The outcome is `error`. If it made progress, the
   item's next session resumes it once with a "stopped by a time limit, check `git status` and continue" message
   (fresh phase session if the resume fails); without progress the next session starts fresh.
+  So that a long command or background wait is not cut silently, every session (new and resumed) carries a
+  **long-wait rule** in its system prompt, next to the standing rule: never wait silently longer than a check
+  interval, check the progress of a long command or background task at least once per interval (latest output, a
+  progress counter, whether the process is alive), and treat two checks in a row without progress as hung (stop it,
+  record what was seen, continue another way or report it). The interval is half of `session_idle_minutes`, rounded
+  down to whole minutes, at least 1 (10 with the default 20); the rule names both numbers. A background wait still
+  does not count as activity.
 - **Limit check:** a work session (propose, apply, review, archive, act) at `session_max_minutes` is not cut at once.
   While it keeps running (the inactivity limit, a sleep and Ctrl+C still apply), the product team (the triage team,
   else the first product team) gets a read-only consultation (`Read`, `Grep`, `Glob`; phase `limit_check`, a

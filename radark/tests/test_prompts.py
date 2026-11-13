@@ -201,3 +201,20 @@ def test_propose_review_archive_prompts_have_no_blocked_line():
     for phase in ("propose", "review", "archive"):
         text = prompts.phase_prompt(cand(phase, change="add-export"))
         assert "BLOCKED" not in text and "still waiting" not in text
+
+
+# ---- long-wait rule (check-long-waits D2, D5)
+
+def test_long_wait_rule_default_limit():
+    text = prompts.long_wait_rule(20.0)
+    assert "ended after 20 minutes without output" in text and "20.0" not in text
+    assert "longer than 10 minutes" in text and "at least once every 10 minutes" in text
+    assert "two checks in a row show no progress" in text and "treat it as hung" in text
+
+
+def test_long_wait_rule_interval_follows_the_limit():
+    for limit, interval in [(30, 15), (1, 1), (25, 12), (2.5, 1)]:
+        text = prompts.long_wait_rule(limit)
+        assert f"ended after {limit:g} minutes" in text, limit
+        assert f"longer than {interval} minutes" in text and f"every {interval} minutes" in text, limit
+    assert "ended after 2.5 minutes" in prompts.long_wait_rule(2.5)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 
 from .select import Candidate
@@ -12,6 +13,21 @@ STANDING_RULE = (
     "tasks notes), and continue. Stop only when this phase is complete or blocked by something "
     "outside this repository."
 )
+
+
+def long_wait_rule(idle_minutes: float) -> str:
+    """The long-wait rule every session carries in its system prompt (check-long-waits D2, D5): the check interval
+    is half the inactivity limit, rounded down to whole minutes, at least 1."""
+    interval = max(1, math.floor(idle_minutes / 2))
+    return (
+        f"Long waits: this session is ended after {idle_minutes:g} minutes without output from you (a running "
+        "command does not count as output). Never wait silently on a command or a background task for longer than "
+        f"{interval} minutes: run long commands so that you can check them, and check their progress at least once "
+        f"every {interval} minutes (its latest output, a progress counter, whether the process is alive). If two "
+        "checks in a row show no progress, treat it as hung: stop it, record what was seen, and continue another way "
+        "or report it."
+    )
+
 
 CHANGE_LINE_RE = re.compile(r"^\s*CHANGE:\s*`?([A-Za-z0-9._-]+)`?\s*$", re.M)
 BLOCKED_LINE_RE = re.compile(r"^[ \t]*BLOCKED:[ \t]*owner[ \t]*[—–-][ \t]*(.+?)[ \t]*$", re.M | re.I)

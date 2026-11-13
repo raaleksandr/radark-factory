@@ -342,3 +342,25 @@ def test_deadline_counts_the_runner_clock(env):
                    on_deadline=lambda res, elapsed: calls.append(elapsed) or (3600 if len(calls) == 1 else None))
     assert r.timeout_reason == "max_time" and len(calls) == 2
     assert 180 * 60 <= calls[0] < 200 * 60 and 240 * 60 <= calls[1] < 260 * 60
+
+
+# ---- long-wait rule in the system prompt (check-long-waits D1)
+
+def system_prompt(env, idle=None, **kw):
+    cfg = env.cfg()
+    if idle is not None:
+        cfg.session_idle_minutes = idle
+    env.set_claude([{"steps": [START], "result": {}}])
+    Runner(cfg).run("app", "do it", phase="apply", **kw)
+    argv = env.claude_calls()[-1]["argv"]
+    return argv[argv.index("--append-system-prompt") + 1]
+
+
+def test_long_wait_rule_in_every_session_system_prompt(env):
+    from radark.prompts import STANDING_RULE, long_wait_rule
+    for kw in ({}, {"resume": "sess-abc"}):
+        text = system_prompt(env, **kw)
+        assert text == STANDING_RULE + "\n\n" + long_wait_rule(20)
+        assert "ended after 20 minutes" in text and "every 10 minutes" in text
+        text = system_prompt(env, idle=30.0, **kw)
+        assert STANDING_RULE in text and "ended after 30 minutes" in text and "every 15 minutes" in text
