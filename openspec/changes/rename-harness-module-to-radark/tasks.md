@@ -32,7 +32,7 @@ Handover: HO-20261113-6cg3 (RB-002). Start and end the session with `ho sync`.
 - [x] 5.3 Sandbox check: `python radark/sandbox/make_sandbox.py <tmp>` then `python -m radark --config <tmp>/harness.toml dry-run` and the same with `-m harness`; verify same stdout and exit code
 - [x] 5.4 Full suite `python -m pytest radark/tests` passes; note the count and any failing or flaky tests per hub `AGENTS.md` §10
 - [x] 5.5 Commit locally (no push, tag, release or reinstall), with a message citing HO-20261113-6cg3; verify `git status` is clean
-- [ ] 5.6 `ho done HO-20261113-6cg3 -m "..."` listing the commit(s), the test count, that the alias covers `-m` and imports (or what was chosen), that the owner needs no change in team settings (hooks come from the installed package per session) and only reinstalls, optionally the separate idea of renaming `harness.toml`/`.harness/`; then `ho sync`
+- [x] 5.6 `ho done HO-20261113-6cg3 -m "..."` listing the commit(s), the test count, that the alias covers `-m` and imports (or what was chosen), that the owner needs no change in team settings (hooks come from the installed package per session) and only reinstalls, optionally the separate idea of renaming `harness.toml`/`.harness/`; then `ho sync`
 
 ## Workflow follow-up
 
