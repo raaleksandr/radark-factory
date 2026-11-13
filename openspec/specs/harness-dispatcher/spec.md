@@ -66,6 +66,7 @@ For each selected candidate the dispatcher SHALL choose a phase and send the tea
 - a product team's `action_required` item → **act** on the handover per the hub guide, without creating an OpenSpec change for routine work.
 A technical handover's change counts as proposed only when the dispatcher knows it: the propose session named it, or a change in the team repository cites the handover ID. A propose session after which no such change is known, whatever its outcome, MUST leave the handover new, so that its next session is propose again; the dispatcher SHALL log this and show it on the console. The no-progress rule of *Session outcome* still applies to these repeated propose sessions.
 Every prompt MUST also carry the standing rule: never ask the user; choose the best variant, record the assumption in the change, and continue; stop only when the phase is complete or blocked by something outside the repository.
+Every session the dispatcher starts, new or resumed, MUST also carry the long-wait rule in its system prompt: do not wait silently on a command or a background task for longer than the check interval; check its progress at least once per interval (its latest output, a progress counter, whether the process is alive); if two checks in a row show no progress, treat it as hung: stop it, record what was seen, and continue another way or report it. The check interval SHALL be half the configured inactivity limit (`loop.session_idle_minutes`), rounded down to whole minutes, and at least 1 minute (10 minutes with the default 20-minute limit), and the rule SHALL state both the interval and the inactivity limit. The inactivity limit and what counts as activity are unchanged.
 
 #### Scenario: New task goes to propose
 - **WHEN** `app` has a new `action_required` handover `HO-20261016-ab12` with no change recorded for it
@@ -90,6 +91,18 @@ Every prompt MUST also carry the standing rule: never ask the user; choose the b
 #### Scenario: Record from an older dispatcher
 - **WHEN** a stored record says phase `propose` with no change, the handover is not returned and the hub shows no `done` by the team
 - **THEN** the next session for that handover is propose
+
+#### Scenario: Long-wait rule with the default limit
+- **WHEN** the dispatcher starts or resumes any session with the default inactivity limit of 20 minutes
+- **THEN** the session's system prompt carries the standing rule and the long-wait rule with a check interval of 10 minutes, and names the 20-minute limit
+
+#### Scenario: Long-wait rule follows the configured limit
+- **WHEN** `loop.session_idle_minutes` is 30
+- **THEN** the long-wait rule names a check interval of 15 minutes and the 30-minute limit
+
+#### Scenario: Non-integer limit rounds the interval down
+- **WHEN** `loop.session_idle_minutes` is 25, or 2.5
+- **THEN** the long-wait rule names a check interval of 12 minutes, or of 1 minute with the 2.5-minute limit
 
 ### Requirement: Archive only after the author closes
 The propose prompt SHALL tell a technical team that the change's tasks must not include archiving the change or syncing its specs, and that archive is a separate phase run after the author closes the handover. Every apply prompt, for a new or a returned handover, SHALL tell the team not to archive the change and not to sync its specs, and to end with `ho done`, leaving any archive task unchecked.
