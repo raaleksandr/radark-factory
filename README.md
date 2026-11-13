@@ -10,13 +10,14 @@ anything else on the escalation list, and decides through the same hub the agent
 
 ## Status
 
-Early and opinionated. Used daily on one Windows 11 PC with four teams. Python 3.11+, standard library only.
+Early and opinionated. Used daily on one Windows 11 PC with four teams. Python 3.11+, standard library only (plus `ho` from radark-handover).
 Tested with Claude Code 2.1.302.
 
 ## How it fits together
 
 - **Teams** — Git repositories, each with its own `CLAUDE.md` and OpenSpec setup.
-- **Hub** — a directory (normally a Git repository) of Markdown handovers, edited only through the `ho` CLI.
+- **Hub** — a directory (normally a Git repository) of Markdown handovers, edited only through the `ho` CLI
+  from [radark-handover](https://github.com/raaleksandr/radark-handover) (installed with radark-factory).
 - **Dispatcher** (`radark`) — reads `ho inbox --json` for every team, picks the next step, launches Claude Code
   with hooks injected through `--settings`, logs everything to its run directory.
 

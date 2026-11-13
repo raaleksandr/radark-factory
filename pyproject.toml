@@ -4,12 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "radark-factory"
-version = "0.1.0"
+version = "0.1.1"
 description = "A dispatcher that runs Claude Code team agents through OpenSpec phases, driven by a handover hub."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
-dependencies = []          # standard library only; the `ho` hub CLI and `claude` must be on PATH
+dependencies = [          # standard library otherwise; `claude` must be on PATH
+    "radark-handover @ git+https://github.com/raaleksandr/radark-handover.git@v0.1.0",   # the `ho` CLI
+]
 keywords = ["claude-code", "agents", "dark-factory", "software-factory", "openspec", "orchestration"]
 classifiers = [
     "Programming Language :: Python :: 3",
