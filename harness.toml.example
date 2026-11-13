@@ -56,7 +56,8 @@ usage_pause_percent = 90       # no new step while a usage window (five_hour / s
 usage_backoff_minutes = 30     # fallback wait after a usage-limit hit with no known reset time (doubling)
 usage_backoff_max_minutes = 300
 idle_ask = false
-# keep_awake = "off"             # off | on | HH:MM-HH:MM (daily range, may cross midnight); --keep-awake overrides
+# keep_awake = "on"              # on (default: whole run) | off (let the computer sleep) | HH:MM-HH:MM (daily range,
+                               # may cross midnight); --keep-awake overrides
 
 [goal]                         # limits of a goal run (run --goal <file>); --max-sessions / --max-hours override
 max_sessions = 40              # every session counts: work, triage consultation, goal check

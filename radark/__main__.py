@@ -1204,7 +1204,7 @@ class Dispatcher:
     def start_keep_awake(self) -> None:
         """Console line and log record for the setting, then the keeper thread; nothing for `off` (design D7)."""
         s = self.keep_awake
-        if s.mode == "off":
+        if s.mode == "off" or (s.default and os.name != "nt"):  # the default warns about nothing (keep-awake-by-default D5)
             return
         moment = s.until or s.given
         self.log.write("keep_awake_setting", mode=s.mode, text=s.text,
@@ -1405,7 +1405,7 @@ def stamp(ts: float | None = None) -> str:
 def keep_awake_text(s: KeepAwake, now: float | None = None, until: float | None = None) -> str:
     """`whole run`, `until 23:00 today, in 9 h 00 min`, `daily 08:00-23:00 (now: off, from 08:00)` (design D7);
     `whole run (until 12:00 given, the run ends at 12:00)` for a moment covered by the end time `until`
-    (keep-awake-covers-until D2)."""
+    (keep-awake-covers-until D2); `whole run (default; ...)` for the default setting (keep-awake-by-default D1)."""
     now = time.time() if now is None else now
     if s.mode == "on" and s.given is not None and until is not None:
         return f"whole run (until {s.text} given, the run ends at {day_clock(until, now)})"
@@ -1414,7 +1414,7 @@ def keep_awake_text(s: KeepAwake, now: float | None = None, until: float | None 
     if s.mode == "range":
         on = wanted(s, dt.datetime.fromtimestamp(now))
         return f"daily {s.text} " + ("(now: on)" if on else f"(now: off, from {s.start:%H:%M})")
-    return "whole run"
+    return "whole run (default; --keep-awake off lets the computer sleep)" if s.default else "whole run"
 
 
 def local_iso(ts: float | None) -> str | None:

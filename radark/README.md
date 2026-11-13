@@ -25,7 +25,7 @@ Runtime: Python 3.12, standard library only. Tests: `pytest`. Tested with Claude
 | `[launch]` `permission_mode`, `extra_args` | default `auto`; `bypassPermissions` and `--bare` are refused |
 | `[answers]` `default`, `escalation_keywords` | the "choose the best variant" text; words that send a question to the owner (matched at a word start, case-insensitive, `ё` = `е`; the defaults include Russian stems such as `удал`, `пуш`, `депло`, `оплат`) |
 | `[triage]` `team`, `teams`, `max_per_handover` | product team that answers questions; `teams` limits whose questions are triaged (default: **every** team, the product team included); escalate after N triages per handover |
-| `[loop]` | `poll_seconds` 120, `session_idle_minutes` 20 (no stream event for that long ends the session), `session_max_minutes` 180 (maximum duration; the old `session_timeout_minutes` is accepted as this; both count awake time only; for a work session a checkpoint, see **Limit check**), `limit_check_minutes` 60 (positive: extension when the limit check finds the session progressing), `limit_checks` 3 (integer ≥ 0: limit checks per session, so a healthy work session runs up to 180 + 3 × 60 = 360 min; 0 turns them off and every session is cut at the maximum), `wake_grace_minutes` 3 (positive: after the computer wakes, a session with no stream line for that long is ended as `interrupted` and resumed), `no_progress_limit` 2, `usage_pause_percent` 90 (integer 1–100: no new step while a usage window not yet reset is used at least this much; 100 turns the prediction off; `run --budget-5h` / `--budget-7d` replace it per window for one run), `usage_backoff_minutes` 30 (doubling up to `usage_backoff_max_minutes` 300; only when a usage-limit hit has no known reset time), `idle_ask` false, `keep_awake` `"off"` (`"off"`, `"on"` or a daily range `"HH:MM-HH:MM"`: when a run keeps the computer from sleeping on its own; not a moment, which applies to one run only; `--keep-awake` replaces it for one run, see **Keep awake**) |
+| `[loop]` | `poll_seconds` 120, `session_idle_minutes` 20 (no stream event for that long ends the session), `session_max_minutes` 180 (maximum duration; the old `session_timeout_minutes` is accepted as this; both count awake time only; for a work session a checkpoint, see **Limit check**), `limit_check_minutes` 60 (positive: extension when the limit check finds the session progressing), `limit_checks` 3 (integer ≥ 0: limit checks per session, so a healthy work session runs up to 180 + 3 × 60 = 360 min; 0 turns them off and every session is cut at the maximum), `wake_grace_minutes` 3 (positive: after the computer wakes, a session with no stream line for that long is ended as `interrupted` and resumed), `no_progress_limit` 2, `usage_pause_percent` 90 (integer 1–100: no new step while a usage window not yet reset is used at least this much; 100 turns the prediction off; `run --budget-5h` / `--budget-7d` replace it per window for one run), `usage_backoff_minutes` 30 (doubling up to `usage_backoff_max_minutes` 300; only when a usage-limit hit has no known reset time), `idle_ask` false, `keep_awake` `"on"` (`"off"`, `"on"` or a daily range `"HH:MM-HH:MM"`: when a run keeps the computer from sleeping on its own; `"off"` lets the computer sleep; not a moment, which applies to one run only; `--keep-awake` replaces it for one run, see **Keep awake**) |
 | `[goal]` `max_sessions`, `max_hours` | limits of a goal run: 40 sessions (every session counts: work, triage consultation, goal check), 12 hours (usage-limit waits count, sleeps of the computer do not); both positive; `--max-sessions` / `--max-hours` override them |
 
 A broken config (missing value, missing repository path, `ho` / `claude` not found) exits with code 2 and names the problem.
@@ -78,9 +78,8 @@ removed) or `<run_dir>/STOP` (exit cleanly between sessions). To stop at a time 
 if it has passed or is the current minute), `YYYY-MM-DD HH:MM` (or `YYYY-MM-DDTHH:MM`) a full date and time; local
 wall-clock time, so time the computer sleeps counts (unlike `--max-hours`, which counts awake time). From that moment
 no new step starts and the run ends (exit 0; a goal run ends with `limit`); a session running at that moment finishes
-first, which can be up to `session_max_minutes` later (a work session extended by its limit checks: longer). For
-"work until 12:00 without sleep" use `run --until 12:00 --keep-awake`: it keeps the computer awake until the run
-really ends, including that session (see **Keep awake**). Waits without a session (idle poll, `PAUSE`, usage wait,
+first, which can be up to `session_max_minutes` later (a work session extended by its limit checks: longer). By
+default the run keeps the computer awake until it really ends, including that session (see **Keep awake**). Waits without a session (idle poll, `PAUSE`, usage wait,
 back-off) end at the moment. The start line says `Run ends at 07:00 tomorrow (2026-10-30), in 8 h 50 min`
 (`run_until` in `runs.jsonl`; the end logs `run_until_reached`). The end time applies to that one run and is not
 stored. An unreadable value or a full date and time in the past is refused (exit 2) before any session. To check:
@@ -89,13 +88,15 @@ the session and exits, second press ends the session (process tree, outcome `int
 exits; the next start resumes that session in its own context. A second dispatcher on the same
 run directory is refused by `<run_dir>/lock` (a stale lock from a dead PID is replaced with a warning).
 
-**Keep awake:** by default the dispatcher does not keep the computer awake, and Windows may put it to sleep as its
-power plan says (a session it interrupts is resumed after the wake). `--keep-awake WHEN` (`run`, `run --once`,
+**Keep awake:** by default the dispatcher keeps the computer awake for the whole run and says so at the start
+(`Keep awake: whole run (default; --keep-awake off lets the computer sleep)`); `--keep-awake off` (one run) or
+`[loop] keep_awake = "off"` lets Windows put it to sleep as its power plan says (a session it interrupts is resumed
+after the wake). Before change keep-awake-by-default the default was `off`. `--keep-awake WHEN` (`run`, `run --once`,
 `run --goal`, `dry-run`) sets for one run when the computer is kept from going to sleep on its own: `off` (never), `on`
 or the bare flag (the whole run), `HH:MM` / `YYYY-MM-DD HH:MM` (from the start until that moment, the same forms as
 `--until`; after it the computer may sleep while the run goes on), or a daily range `HH:MM-HH:MM` such as
 `08:00-23:00` (a range whose end is earlier than its start crosses midnight: `22:00-02:00`). `[loop] keep_awake` sets
-the default (`off`, `on` or a range); the option replaces it. With an end time (`--until`), a moment at or after it
+the default (`off`, `on` or a range; without it, the whole run); the option replaces it. With an end time (`--until`), a moment at or after it
 means the whole run: `--until 12:00 --keep-awake 12:00` (or `13:00`) keeps the computer awake until the run really
 ends, including a session that finishes after 12:00, the same as the bare flag; a moment before the end time keeps its
 meaning (the computer may sleep after it while the run goes on). A range is checked every 30 s, so keeping awake starts
@@ -106,10 +107,10 @@ and a low battery still put the computer to sleep. To keep working with the lid 
 
 **Screen off for the night:** `npm run screen-off` (`scripts/screen-off.ps1`) covers every monitor with a black
 window and hides the cursor; a key press, a click or a mouse move brings the screen back. The power plan's display
-timeout then turns the panel off. With keeping awake on, the computer does not sleep: Windows logs this display-off as
+timeout then turns the panel off. While keeping awake holds (the default), the computer does not sleep: Windows logs this display-off as
 Kernel-Power 506 "entering Modern Standby, Reason: Idle Timeout", but the processes go on (owner's laptop,
-2026-11-08: no gap between real and awake time, no sleep line). Without keeping awake the computer may enter standby
-as its power plan says. Do not turn the monitor off with `SC_MONITORPOWER` (the older version of the script, or
+2026-11-08: no gap between real and awake time, no sleep line). With keeping awake turned off (`--keep-awake off`, or outside a moment or range) the
+computer may enter standby as its power plan says. Do not turn the monitor off with `SC_MONITORPOWER` (the older version of the script, or
 similar tools): on Modern Standby Windows handles it like the power button and the computer enters standby within
 a minute, whatever keeps it awake. `SetThreadExecutionState` with `ES_SYSTEM_REQUIRED` (used), with
 `ES_DISPLAY_REQUIRED` added, and a power request (`PowerSetRequest`, system and execution required) were all tested
@@ -117,15 +118,18 @@ against it and all failed (change harness-survive-sleep, D1).
 
 The setting ends with the run (end of the work, a limit, `STOP`,
 Ctrl+C, a closed window: Windows drops the request with the process) and is not stored. The start line says
-`Keep awake: whole run`, `Keep awake: until 23:00 today, in 9 h 00 min`, `Keep awake: daily 08:00-23:00 (now: on)`
+`Keep awake: whole run (default; --keep-awake off lets the computer sleep)` without the option and `[loop]
+keep_awake` (also with `--until` alone), `Keep awake: whole run` for an explicit `on`, `Keep awake: until 23:00 today, in 9 h 00 min`, `Keep awake: daily 08:00-23:00 (now: on)`
 or, for a moment covered by the end time, `Keep awake: whole run (until 12:00 given, the run ends at 12:00)` (an end
 on a later day reads `12:00 tomorrow` or `12:00 on 2026-11-20`)
 (`keep_awake_setting` in `runs.jsonl`, with `mode` `on` and the given moment in `until` for the last one; a goal run's `goal_start` records `keep_awake`); each change during the run
 prints `23:00  Keep awake ended; the computer may sleep.` or `08:00  Keep awake started.` and logs `keep_awake`.
-`python -m radark dry-run --keep-awake 08:00-23:00` prints `Would keep awake: daily 08:00-23:00 (now: off, from
+`python -m radark dry-run` without the option prints `Would keep awake: whole run (default; --keep-awake off lets
+the computer sleep)`, with `--keep-awake off` no keep-awake line; `dry-run --keep-awake 08:00-23:00` prints `Would keep awake: daily 08:00-23:00 (now: off, from
 08:00)` outside the range; `dry-run --until 12:00 --keep-awake 12:00` prints `Would keep awake: whole run (until
 12:00 given, the run ends at 12:00)`. An unreadable value is refused (exit 2) before any session. On a system other than
-Windows the run prints `! keeping the computer awake is not available on this system` and goes on.
+Windows a run with keeping awake set by the option or the configuration prints `! keeping the computer awake is not
+available on this system` and goes on; with the default it prints nothing about it and goes on as with `off`.
 
 ## Running in a visible console (with Claude Code watching)
 

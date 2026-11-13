@@ -25,6 +25,10 @@ class KeepAwake:
     end: dt.time | None = None
     text: str = "off"  # as given, for `goal_start`
     given: dt.datetime | None = None  # mode on: the moment given, covered by the run's end time (reporting only)
+    default: bool = False  # set by neither the option nor the configuration (reporting only; keep-awake-by-default D1)
+
+
+DEFAULT = KeepAwake("on", text="on", default=True)  # without option and configuration (keep-awake-by-default D1)
 
 
 def parse_keep_awake(text: str, now: dt.datetime) -> KeepAwake | None:

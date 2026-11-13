@@ -58,7 +58,7 @@ class FakeKeeper:
 
 
 @pytest.fixture
-def fake_keeper(monkeypatch):
+def fake_keeper(env, monkeypatch):  # after `env`, which installs the no-op keeper
     FakeKeeper.made = []
     monkeypatch.setattr(hm, "Keeper", FakeKeeper)
     monkeypatch.setattr(hm.os, "name", "nt")
@@ -114,8 +114,14 @@ def test_wanted(setting, now, expected):
 
 # ---- configuration (task 1.2)
 
-def test_config_default_off(env):
-    assert env.cfg().keep_awake.mode == "off"
+def test_config_default_on(env):
+    assert env.cfg().keep_awake == KeepAwake("on", text="on", default=True)
+
+
+@pytest.mark.parametrize("value, expected", [('"on"', KeepAwake("on", text="on")), ('"off"', KeepAwake("off"))])
+def test_config_written_is_not_the_default(env, value, expected):
+    set_key(env, value)
+    assert env.cfg().keep_awake == expected
 
 
 @pytest.mark.parametrize("value, mode", [('"off"', "off"), ('"on"', "on"), ('"22:00-02:00"', "range")])
@@ -371,6 +377,7 @@ def test_start_line_range(env, fake_keeper):
 
 
 def test_goal_start_records_off(env):
+    set_key(env, '"off"')
     goal = env.root / "goal.md"
     goal.write_text("Finish B-1.", encoding="utf-8")
     d = Dispatcher(env.cfg(), out=lambda *a: None)
@@ -389,7 +396,92 @@ def test_dry_run_range(env, capsys):
 def test_dry_run_without_the_option(env, capsys):
     with_task(env)
     assert run(env, "dry-run") == 0
+    assert "Would keep awake: whole run (default; --keep-awake off lets the computer sleep)" in capsys.readouterr().out
+
+
+def test_dry_run_off(env, capsys):
+    with_task(env)
+    assert run(env, "dry-run", "--keep-awake", "off") == 0
     assert "keep awake" not in capsys.readouterr().out.lower()
+
+
+def test_dry_run_until_alone_prints_the_default_line(env, capsys):
+    with_task(env)
+    assert run(env, "dry-run", "--until", "12:00") == 0
+    assert "Would keep awake: whole run (default; --keep-awake off lets the computer sleep)" in capsys.readouterr().out
+
+
+# ---- the default (keep-awake-by-default)
+
+DEFAULT_LINE = "Keep awake: whole run (default; --keep-awake off lets the computer sleep)"
+
+
+def test_default_run_keeps_awake(env, fake_keeper, capsys):
+    assert run(env, "run", "--once") == 0
+    assert DEFAULT_LINE in capsys.readouterr().out
+    assert len(fake_keeper) == 1 and fake_keeper[0].started and fake_keeper[0].stopped
+    rec = log_events(env, "keep_awake_setting")[0]
+    assert rec["mode"] == "on" and rec["text"] == "on" and rec["until"] is None
+
+
+@pytest.mark.parametrize("args, key", [(["--keep-awake", "off"], None), ([], '"off"')])
+def test_off_does_not_keep_awake(env, fake_keeper, capsys, args, key):
+    if key:
+        set_key(env, key)
+    assert run(env, "run", "--once", *args) == 0
+    assert "Keep awake" not in capsys.readouterr().out
+    assert fake_keeper == [] and log_events(env, "keep_awake_setting") == []
+
+
+@pytest.mark.parametrize("args, key", [(["--keep-awake"], None), (["--keep-awake", "on"], None), ([], '"on"')])
+def test_explicit_on_has_no_note(env, fake_keeper, capsys, args, key):
+    if key:
+        set_key(env, key)
+    assert run(env, "run", "--once", *args) == 0
+    out = capsys.readouterr().out
+    assert "Keep awake: whole run" in out.splitlines() and "default;" not in out
+
+
+def test_until_alone_prints_the_default_line(env, fake_keeper, capsys):
+    assert run(env, "run", "--once", "--until", "12:00") == 0
+    assert DEFAULT_LINE in capsys.readouterr().out
+    assert fake_keeper[0].setting.mode == "on" and fake_keeper[0].setting.default
+
+
+def test_until_with_covered_moment_has_no_note(env, fake_keeper, capsys):
+    assert run(env, "run", "--once", "--until", "12:00", "--keep-awake", "12:00") == 0
+    out = capsys.readouterr().out
+    assert "Keep awake: whole run (until 12:00 given, the run ends at 12:00" in out and "default;" not in out
+
+
+def test_goal_run_records_the_default(env, fake_keeper):
+    with_task(env)
+    env.set_claude([{"steps": [START], "result": {}}])
+    goal = env.root / "goal.md"
+    goal.write_text("Finish B-1.", encoding="utf-8")
+    assert run(env, "run", "--goal", str(goal), "--max-sessions", "1", "--no-wait") == 6
+    assert log_events(env, "goal_start")[0]["keep_awake"] == "on" and fake_keeper[0].stopped
+
+
+def test_not_windows_default_is_silent(env, monkeypatch):
+    lines = []
+    d = Dispatcher(env.cfg(), out=lines.append)
+    assert d.keep_awake.default
+    with monkeypatch.context() as m:
+        m.setattr(os, "name", "posix")
+        d.start_keep_awake()
+    assert d.keeper is None and lines == [] and log_events(env) == []
+
+
+def test_not_windows_explicit_on_warns(env, monkeypatch):
+    set_key(env, '"on"')
+    lines = []
+    d = Dispatcher(env.cfg(), out=lines.append)
+    with monkeypatch.context() as m:
+        m.setattr(os, "name", "posix")
+        d.start_keep_awake()
+    assert d.keeper is None
+    assert len(lines) == 1 and lines[0].endswith("  ! keeping the computer awake is not available on this system")
 
 
 # ---- a moment covered by the end time (keep-awake-covers-until)

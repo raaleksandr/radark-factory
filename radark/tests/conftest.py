@@ -1,9 +1,11 @@
 import json
+import queue
 import sys
 from pathlib import Path
 
 import pytest
 
+import radark.__main__ as main_mod
 from radark import config as config_mod
 
 FAKES = Path(__file__).resolve().parent / "fakes"
@@ -37,6 +39,21 @@ def write_config(root: Path, extra: str = "", triage: bool = True, teams=TEAMS) 
     return path
 
 
+class NoKeeper:
+    """Stands in for the keeper thread, so no test holds a real Windows keep-awake request (keep-awake-by-default
+    D2); `test_keep_awake.py` replaces it again with a recording fake."""
+
+    def __init__(self, setting):
+        self.setting = setting
+        self.changes = queue.SimpleQueue()
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+
 class Env:
     def __init__(self, root: Path, monkeypatch):
         self.root = root
@@ -49,6 +66,7 @@ class Env:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-never-reach-claude")
         monkeypatch.setattr(sys, "stdout", sys.stdout)  # `run` tees the console to console.log; undo it after the test
         monkeypatch.setattr(sys, "stderr", sys.stderr)
+        monkeypatch.setattr(main_mod, "Keeper", NoKeeper)
         self.config_path = write_config(root)
 
     def cfg(self):

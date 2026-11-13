@@ -8,7 +8,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .awake import KeepAwake, parse_keep_awake
+from .awake import DEFAULT as KEEP_AWAKE_DEFAULT, KeepAwake, parse_keep_awake
 
 DEFAULT_ANSWER = (
     "No user is available. Choose the best variant yourself, record the assumption "
@@ -63,7 +63,8 @@ class Config:
     usage_backoff_max_minutes: int = 300
     usage_pause_percent: int = 90  # no new step while a window is used at or above this share (usage-limit-guard)
     idle_ask: bool = False
-    keep_awake: KeepAwake = KeepAwake()  # default of `--keep-awake`: off, on or a daily range (keep-awake D2)
+    keep_awake: KeepAwake = KEEP_AWAKE_DEFAULT  # default of `--keep-awake`: off, on or a daily range (keep-awake D2);
+    # without `[loop] keep_awake` the whole run (keep-awake-by-default D1)
     owner_team: str = "owner"
     goal_max_sessions: int = 40  # safety limits of a goal run (goal-run design G1)
     goal_max_hours: float = 12
@@ -163,7 +164,7 @@ def load(path: str | Path) -> Config:
         usage_backoff_max_minutes=int(loop.get("usage_backoff_max_minutes", 300)),
         usage_pause_percent=loop.get("usage_pause_percent", 90),
         idle_ask=bool(loop.get("idle_ask", False)),
-        keep_awake=_keep_awake(loop.get("keep_awake", "off")),
+        keep_awake=_keep_awake(loop["keep_awake"]) if "keep_awake" in loop else KEEP_AWAKE_DEFAULT,
         owner_team=str(data.get("owner_team", "owner")),
         goal_max_sessions=int(goal.get("max_sessions", 40)),
         goal_max_hours=float(goal.get("max_hours", 12)),
