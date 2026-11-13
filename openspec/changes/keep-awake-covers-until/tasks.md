@@ -17,7 +17,7 @@ Change for HO-20261113-aidk (RB-007).
 ## 3. Hand back
 
 - [x] 3.1 Commit locally (no push, tag, release or reinstall) with a message citing HO-20261113-aidk; verify `git status` is clean
-- [ ] 3.2 `ho done HO-20261113-aidk -m "..."` listing the change name, the commit(s), the test count, the exact start-line and `dry-run` texts, and any failing or flaky tests; then `ho sync`
+- [x] 3.2 `ho done HO-20261113-aidk -m "..."` listing the change name, the commit(s), the test count, the exact start-line and `dry-run` texts, and any failing or flaky tests; then `ho sync`
 
 ## Workflow follow-up
 
