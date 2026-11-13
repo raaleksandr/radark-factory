@@ -37,7 +37,7 @@ Change for HO-20261113-5lbl (RB-015). Design: W1–W7.
 ## 7. Hand back
 
 - [x] 7.1 Commit locally (no push, tag, release or reinstall) with messages citing HO-20261113-5lbl; verify `git status` is clean.
-- [ ] 7.2 `ho done HO-20261113-5lbl -m "..."` listing: the change name, the commits, the test count, the new setting with its default, the exact wrap-up prompt text, how the product team sees the signal (log events, console, review paragraph text), and any failing or flaky tests; then `ho sync`.
+- [x] 7.2 `ho done HO-20261113-5lbl -m "..."` listing: the change name, the commits, the test count, the new setting with its default, the exact wrap-up prompt text, how the product team sees the signal (log events, console, review paragraph text), and any failing or flaky tests; then `ho sync`.
 
 ## Notes
 
