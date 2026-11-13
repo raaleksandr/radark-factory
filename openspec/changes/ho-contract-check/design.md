@@ -65,6 +65,20 @@ with `"exit"` → exit with that code and print nothing on stdout (an old `ho`, 
 other dict → print it as the JSON answer. The call is logged in `.calls` like every call. The "missing" case uses a
 non-existent command in the test config.
 
+### D6. Apply notes (decided in apply)
+- **Shape confirmed:** radark-handover's `ho done` of HO-20261113-cbcj (commit 50901f1, change
+  `add-version-command`): `ho --version` → `ho 0.2.0 (contract 1)`; `ho --version --json` →
+  `{"schema_version": 1, "version": "0.2.0", "contract": 1}`; `contract` always equals `schema_version`; an old `ho`
+  exits 1 with no JSON. D1 holds unchanged.
+- **Missing command found earlier:** `config.load` already refuses an `ho` / `claude` command that is not on `PATH`
+  or not a file (`Configuration error: ...`, exit 2) before `main()` reaches the check. Instead of moving that check,
+  its message for `ho` now carries the same hint as D3's "missing" case (needed contract, install radark-handover or
+  fix `ho` in harness.toml). `check_ho`'s own "missing" message stays for a command that exists but cannot be
+  started.
+- A JSON answer with exit 0 but no usable `version` / contract is reported as "too old" with
+  `(no version in its answer)` instead of an exit code.
+- The fake also takes a string `"_version"`, printed as is (a non-JSON answer).
+
 ## Risks / Trade-offs
 
 - Until radark-handover's release with `--version` is installed, a real run stops as "too old". Intended: the owner

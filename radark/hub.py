@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import clock
@@ -42,6 +43,55 @@ class HoIntegrityError(HoError):
 
 class HoTimeout(HoError):
     """No answer within the awake-time limit; the process tree was killed (D5)."""
+
+
+SUPPORTED_HO_CONTRACTS = (1,)  # JSON contract versions of `ho` this engine reads (ho-contract-check D2)
+VERSION_TIMEOUT_S = 60  # time limit of the start probe `ho --version --json`
+
+
+@dataclass(frozen=True)
+class HoVersion:
+    version: str
+    contract: int
+
+    def line(self) -> str:
+        return f"{self.version} (contract {self.contract})"
+
+
+def contracts_text(supported=SUPPORTED_HO_CONTRACTS) -> str:
+    return " or ".join(str(c) for c in supported)
+
+
+def check_ho(cmd: list[str], hub: Path, timeout: float = VERSION_TIMEOUT_S,
+             supported=SUPPORTED_HO_CONTRACTS) -> HoVersion | str:
+    """Probe `ho --version --json` once at start (ho-contract-check D1-D3). Returns the found version, or the one
+    message that stops the dispatcher: missing, no answer, too old (no usable --version) or unsupported contract."""
+    shown, needed = " ".join(cmd), contracts_text(supported)
+    env = dict(os.environ, HO_HUB=str(hub))
+    env.pop("HO_TEAM", None)
+    try:
+        proc = subprocess.run(list(cmd) + ["--version", "--json"], capture_output=True, env=env, timeout=timeout,
+                              stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return (f"ho '{shown}' did not answer '--version --json' within {timeout:g} s. "
+                f"This radark-factory needs an ho with JSON contract {needed}.")
+    except OSError as exc:
+        return (f"ho not found: cannot start '{shown}' ({exc}). This radark-factory needs an ho with JSON contract "
+                f"{needed}: install radark-handover with that contract, or fix 'ho' in harness.toml.")
+    data = _json(proc.stdout.decode("utf-8", errors="replace"))
+    version = data.get("version") if isinstance(data, dict) else None
+    contract = data.get("contract", data.get("schema_version")) if isinstance(data, dict) else None
+    if (proc.returncode != 0 or not isinstance(version, str) or not version
+            or not isinstance(contract, int) or isinstance(contract, bool)):
+        how = f"exit {proc.returncode}" if proc.returncode != 0 else "no version in its answer"
+        return (f"ho '{shown}' has no --version ({how}): it is older than this radark-factory supports. "
+                f"Found: no version; needed: JSON contract {needed}. "
+                f"Install a radark-handover release that has 'ho --version' with contract {needed}.")
+    if contract not in supported:
+        return (f"ho '{shown}' is version {version} with JSON contract {contract}; this radark-factory needs "
+                f"contract {needed}. Install a radark-handover release with contract {needed}, "
+                f"or a radark-factory release that supports contract {contract}.")
+    return HoVersion(version, contract)
 
 
 _BY_EXIT = {1: HoUsageError, 2: HoNotFound, 3: HoLifecycleError, 4: HoIntegrityError}

@@ -22,7 +22,7 @@ from . import prompts
 from . import select as sel
 from .awake import FORMS as KEEP_AWAKE_FORMS, KeepAwake, Keeper, cover_end_time, parse_keep_awake, wanted
 from .clock import Sleep, SleepWatch, parse_until
-from .hub import Hub, HoError
+from .hub import Hub, HoError, check_ho
 from .runner import Runner, SessionResult, kill_pid_tree
 from .state import GoalRun, RunLog, State, now_ts, read_goal, write_json_atomic
 
@@ -2129,6 +2129,10 @@ def main(argv=None) -> int:
         print(f"{args.id}: {'fresh session per phase' if args.off else 'next phases resume the previous session'}.")
         return 0
 
+    ho = check_ho(cfg.ho, cfg.hub)  # before any other hub call (ho-contract-check D4)
+    if isinstance(ho, str):
+        print(f"ho incompatible: {ho}", file=sys.stderr)
+        return 2
     if args.command == "plan":
         if args.steps <= 0:
             print("--steps must be positive.", file=sys.stderr)
@@ -2147,7 +2151,7 @@ def main(argv=None) -> int:
             return 1
     dry = args.command == "dry-run" or (args.command == "run" and args.dry_run)
     once = args.command == "once" or (args.command == "run" and args.once)
-    print(config_mod.summary(cfg, config_mod.claude_version(cfg)))
+    print(config_mod.summary(cfg, config_mod.claude_version(cfg), ho.line()))
     try:
         config_mod.check_owner(cfg, d.hub.teams())
     except config_mod.ConfigError as exc:

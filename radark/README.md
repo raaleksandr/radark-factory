@@ -11,7 +11,7 @@ Runtime: Python 3.12, standard library only. Tests: `pytest`. Tested with Claude
 1. `ho` and `claude` on `PATH` (or give full commands in the config). The owner's own Claude Code login is used;
    the dispatcher removes `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` from the agents' environment and never uses `--bare`.
 2. `copy harness.toml.example harness.toml` (git-ignored) and adjust paths.
-3. `python -m radark dry-run` — prints the hub, teams, Claude Code version, the candidates and the session it would start.
+3. `python -m radark dry-run` — prints the hub, teams, Claude Code and `ho` versions, the candidates and the session it would start.
 
 ## Configuration (`harness.toml`)
 
@@ -29,6 +29,29 @@ Runtime: Python 3.12, standard library only. Tests: `pytest`. Tested with Claude
 | `[goal]` `max_sessions`, `max_hours` | limits of a goal run: 40 sessions (every session counts: work, triage consultation, goal check), 12 hours (usage-limit waits count, sleeps of the computer do not); both positive; `--max-sessions` / `--max-hours` override them |
 
 A broken config (missing value, missing repository path, `ho` / `claude` not found) exits with code 2 and names the problem.
+
+### Compatibility of `ho`
+
+`run`, `once`, `dry-run` and `plan` first run the configured `ho` with `--version --json` (environment: `HO_HUB`
+set, no `HO_TEAM`; 60 s limit), before any other hub command, lock, log event or session. The answer
+`{"schema_version": 1, "version": "0.2.0", "contract": 1}` gives the package version and the **JSON contract**
+version (radark-handover bumps it only for removed or renamed fields, changed types or meanings, or changed exit
+codes). The engine supports contract **1**: the constant `SUPPORTED_HO_CONTRACTS` in `radark/hub.py` (a tuple, so
+one engine release can accept two contracts during a migration). A compatible `ho` adds the start line
+`ho: 0.2.0 (contract 1)` right after `Claude Code: ...` (`plan` prints no summary). `escalations`, `clear`, `keep`
+and `note` do not use the hub and skip the check.
+
+Otherwise the dispatcher prints one line on stderr and exits with code **2**:
+
+| Case | Message (abridged) | What to do |
+|---|---|---|
+| `ho` not found | `Configuration error: '<cmd>' (ho) was not found. This radark-factory needs an ho with JSON contract 1: ...` (`ho incompatible: ho not found: cannot start ...` when the file exists but cannot be started) | install radark-handover, or fix `ho` in `harness.toml` |
+| too old | `ho incompatible: ho '<cmd>' has no --version (exit 1): it is older than this radark-factory supports. Found: no version; needed: JSON contract 1. ...` | install a radark-handover release that has `ho --version` |
+| no answer | `ho incompatible: ho '<cmd>' did not answer '--version --json' within 60 s. ...` | check the `ho` installation |
+| other contract | `ho incompatible: ho '<cmd>' is version 0.9.0 with JSON contract 2; this radark-factory needs contract 1. Install a radark-handover release with contract 1, or a radark-factory release that supports contract 2.` | install matching releases |
+
+radark-factory and radark-handover are upgraded together: a release of one that changes the contract needs the
+matching release of the other.
 
 ## Commands
 
@@ -469,6 +492,8 @@ max_sessions, max_hours), `goal_guidance_carried` (path, recovered `stored | has
 `pause`, `stop`, `clear`, `hooks_not_loaded`.
 
 ## Hub contract used (read from `ho.py`, task 1.1)
+
+Start check: `ho --version --json` (see **Compatibility of `ho`**).
 
 Read commands: `ho inbox --json`, `ho show <ID> --json`, `ho list --from <team> --status all --json`,
 `ho teams --json` (owner team check), with `HO_HUB` and `HO_TEAM` in the environment.

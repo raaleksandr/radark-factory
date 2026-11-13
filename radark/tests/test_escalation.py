@@ -211,7 +211,7 @@ def test_dry_run_shows_answers_and_writes_nothing(env, capsys):
     assert main(["--config", str(env.config_path), "dry-run"]) == 0
     out = capsys.readouterr().out
     assert "Owner answered HO-FAKE-0001" in out and f"would clear {A}" in out
-    assert all(c["args"][0] in ("inbox", "show", "list", "teams") for c in env.ho_calls()[before:])
+    assert all(c["args"][0] in ("--version", "inbox", "show", "list", "teams") for c in env.ho_calls()[before:])
 
 
 # ---- idle verdict (task 5.1)

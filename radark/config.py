@@ -79,16 +79,26 @@ class Config:
         return [t.id for t in self.teams]
 
 
+def _missing_hint(name: str) -> str:
+    """For a missing `ho`: the contract this engine needs and what to do (ho-contract-check D3)."""
+    if name != "ho":
+        return ""
+    from .hub import contracts_text
+    needed = contracts_text()
+    return (f". This radark-factory needs an ho with JSON contract {needed}: install radark-handover with that "
+            "contract, or fix 'ho' in harness.toml")
+
+
 def _command(value, name: str) -> list[str]:
     """A command is a string (looked up on PATH) or a list (used as given)."""
     if isinstance(value, str):
         found = shutil.which(value)
         if not found:
-            raise ConfigError(f"'{value}' ({name}) was not found on PATH")
+            raise ConfigError(f"'{value}' ({name}) was not found on PATH{_missing_hint(name)}")
         return [found]
     if isinstance(value, list) and value and all(isinstance(v, str) for v in value):
         if not (shutil.which(value[0]) or Path(value[0]).is_file()):
-            raise ConfigError(f"'{value[0]}' ({name}) was not found")
+            raise ConfigError(f"'{value[0]}' ({name}) was not found{_missing_hint(name)}")
         return list(value)
     raise ConfigError(f"'{name}' must be a command name or a non-empty list of strings")
 
@@ -221,7 +231,8 @@ def claude_version(cfg: Config) -> str:
         return f"unknown ({exc})"
 
 
-def summary(cfg: Config, version: str) -> str:
+def summary(cfg: Config, version: str, ho: str | None = None) -> str:
+    """`ho`: the `ho` version line text, e.g. `0.2.0 (contract 1)` (ho-contract-check D4)."""
     lines = [f"Hub: {cfg.hub}", "Teams (in priority order):"]
     for t in cfg.teams:
         lines.append(f"  {t.id:<22} {t.kind:<9} {t.repo}")
@@ -229,5 +240,7 @@ def summary(cfg: Config, version: str) -> str:
         lines.append(f"Triage: questions of {', '.join(cfg.triage.teams)} -> {cfg.triage.team}")
     lines.append(f"Owner (escalations): {cfg.owner_team}")
     lines.append(f"Claude Code: {version}")
+    if ho:
+        lines.append(f"ho: {ho}")
     lines.append(f"Run directory: {cfg.run_dir}")
     return "\n".join(lines)

@@ -186,7 +186,7 @@ def test_dry_run_starts_nothing(env, capsys):
     out = capsys.readouterr().out
     assert "Would start: app" in out and "phase propose" in out and A in out
     assert [c for c in env.claude_calls() if c["argv"] != ["--version"]] == []
-    assert all(c["args"][0] in ("inbox", "show", "list", "teams") for c in env.ho_calls())
+    assert all(c["args"][0] in ("--version", "inbox", "show", "list", "teams") for c in env.ho_calls())
 
 
 def test_lock_refuses_second_instance_and_replaces_stale(env, tmp_path):
