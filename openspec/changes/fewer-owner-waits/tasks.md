@@ -35,7 +35,7 @@
 - [x] 7.1 Run the full suite `python -m pytest radark/tests`; all pass (d: existing tests pass unchanged except the system-prompt assertion extended in 2.2). Note the count and any failing or flaky tests per hub `AGENTS.md` §10.
 - [x] 7.2 Check that nothing private landed in the repository (no owner paths, product names, hub IDs other than this handover's in commit messages, run excerpts).
 - [x] 7.3 Commit locally (no push, tag, release or reinstall) with messages citing HO-20261113-armh; verify `git status` is clean.
-- [ ] 7.4 `ho done HO-20261113-armh -m "..."` listing: the change name, the commits, the test count, new settings (none), the exact new prompt and hook texts (denial rule, guard reasons, `BLOCKED_NOTE` addition, consult addition), what is now allowed and why it is safe, the outcome of task 1.1, and any failing or flaky tests; then `ho sync`.
+- [x] 7.4 `ho done HO-20261113-armh -m "..."` listing: the change name, the commits, the test count, new settings (none), the exact new prompt and hook texts (denial rule, guard reasons, `BLOCKED_NOTE` addition, consult addition), what is now allowed and why it is safe, the outcome of task 1.1, and any failing or flaky tests; then `ho sync`.
 
 ## Notes
 
