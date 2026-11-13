@@ -1021,10 +1021,14 @@ At the start of a run with an end time the dispatcher SHALL print and log the en
 - **THEN** it prints that the run would end at 07:00 the next day, in 8 h 50 min
 
 ### Requirement: Keeping the computer awake
-The owner SHALL be able to set, for a run (plain, one-shot or goal run), when the dispatcher keeps the computer from going to sleep on its own: never, for the whole run, until a moment, or every day within a time range. Without the option the configured default SHALL apply; with neither, the dispatcher MUST NOT keep the computer awake. An unreadable value MUST be refused before any session starts. When the run has an end time and the keeping-awake moment is at or after that end time, the dispatcher SHALL keep the computer awake for the whole run, until the run ends, including a session that finishes after the end time; a moment before the end time SHALL keep its meaning.
+The owner SHALL be able to set, for a run (plain, one-shot or goal run), when the dispatcher keeps the computer from going to sleep on its own: never, for the whole run, until a moment, or every day within a time range. Without the option the configured default SHALL apply; with neither, the dispatcher SHALL keep the computer awake for the whole run. With `off` the dispatcher MUST NOT keep the computer awake. An unreadable value MUST be refused before any session starts. When the run has an end time and the keeping-awake moment is at or after that end time, the dispatcher SHALL keep the computer awake for the whole run, until the run ends, including a session that finishes after the end time; a moment before the end time SHALL keep its meaning.
+
+#### Scenario: Default keeps awake for the whole run
+- **WHEN** the owner starts a run without the option and the configuration does not set a default
+- **THEN** the computer does not go to sleep on its own while the run lasts, also after the display turns off as the power plan says
 
 #### Scenario: Default does not keep awake
-- **WHEN** the owner starts a run without the option and the configuration does not set a default
+- **WHEN** the configuration sets the default to `off` and the owner starts a run without the option
 - **THEN** the dispatcher does not keep the computer awake, and Windows may put it to sleep as its power plan says
 
 #### Scenario: Whole run
@@ -1102,14 +1106,22 @@ Keeping the computer awake SHALL block the sleep that the system starts on its o
 - **THEN** the computer is no longer kept awake
 
 ### Requirement: Keeping awake not available
-On a system where the dispatcher cannot keep the computer awake, a run with keeping awake set SHALL print one `!` console line saying the computer is not kept awake, and SHALL otherwise go on as without the option.
+On a system where the dispatcher cannot keep the computer awake, a run with keeping awake set by the option or the configuration SHALL print one `!` console line saying the computer is not kept awake, and SHALL otherwise go on as without the option. When keeping awake comes only from the default, such a run SHALL print no such line and SHALL go on as with `off`.
 
 #### Scenario: Not Windows
-- **WHEN** a run with keeping awake `on` starts on a system without the Windows power API
+- **WHEN** a run with keeping awake `on` given by the option or the configuration starts on a system without the Windows power API
 - **THEN** the console shows one `!` line that the computer is not kept awake, and the run continues
 
+#### Scenario: Not Windows with the default
+- **WHEN** a run without the option, and without a configured default, starts on a system without the Windows power API
+- **THEN** the console shows no keep-awake line and no `!` line about it, the run log has no keep-awake record, and the run continues
+
 ### Requirement: Reporting keeping awake
-When keeping awake is set for a run, the start of the run SHALL print and log the setting with its moment or range, and the goal run's start record SHALL include it. When a moment at or after the end time is turned into the whole run, the start line and the log record SHALL say so and name the given moment. Each time keeping awake starts or stops during the run, the dispatcher SHALL print one console line with the local time and write a run-log event. `dry-run` SHALL accept the option and print the setting and whether the computer would be kept awake now.
+When keeping awake is set for a run, the start of the run SHALL print and log the setting with its moment or range, and the goal run's start record SHALL include it; this SHALL hold also when the setting comes from the default without the option or the configuration, and then the start line SHALL say that it is the default and how to let the computer sleep. When a moment at or after the end time is turned into the whole run, the start line and the log record SHALL say so and name the given moment. Each time keeping awake starts or stops during the run, the dispatcher SHALL print one console line with the local time and write a run-log event. `dry-run` SHALL accept the option and print the setting and whether the computer would be kept awake now.
+
+#### Scenario: Start line without the option
+- **WHEN** the owner starts a run without the option and the configuration does not set a default
+- **THEN** the start shows "Keep awake: whole run (default; --keep-awake off lets the computer sleep)" and the run log has a record of the setting with the mode of the whole run
 
 #### Scenario: Start line until a moment
 - **WHEN** at 14:00 the owner starts a run with keeping awake until `23:00`
@@ -1123,6 +1135,10 @@ When keeping awake is set for a run, the start of the run SHALL print and log th
 - **WHEN** a run keeps the computer awake until 23:00 and the clock reaches 23:00
 - **THEN** the console shows "23:00  Keep awake ended; the computer may sleep." and the run log has an event with the change
 
+#### Scenario: Dry run without the option
+- **WHEN** the owner runs `dry-run` without the option and the configuration does not set a default
+- **THEN** the output says "Would keep awake: whole run (default; --keep-awake off lets the computer sleep)"
+
 #### Scenario: Dry run with a range
 - **WHEN** at 23:30 the owner runs `dry-run` with keeping awake `08:00-23:00`
 - **THEN** the output names the range and says the computer would not be kept awake now, until 08:00
@@ -1131,8 +1147,16 @@ When keeping awake is set for a run, the start of the run SHALL print and log th
 - **WHEN** the owner runs `dry-run` with end time `12:00` and keeping awake until `12:00`
 - **THEN** the output says the computer would be kept awake for the whole run, naming the given moment
 
+#### Scenario: Whole run set explicitly
+- **WHEN** the owner starts a run with `--keep-awake` or the configuration sets `keep_awake = "on"`
+- **THEN** the start shows "Keep awake: whole run" without the default note
+
+#### Scenario: End time alone with the default
+- **WHEN** the owner starts a run with end time `12:00`, without the option, and the configuration does not set a default
+- **THEN** the start shows "Keep awake: whole run (default; --keep-awake off lets the computer sleep)", and the computer is kept awake until the run ends, including a session that finishes after 12:00
+
 #### Scenario: Not set
-- **WHEN** a run starts with keeping awake off
+- **WHEN** a run starts with keeping awake `off`
 - **THEN** the start shows no keep-awake line and the run log has no keep-awake event
 
 ### Requirement: Hub command across a sleep

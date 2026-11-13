@@ -17,7 +17,7 @@ Change for HO-20261113-xk2k (RB-006).
 
 - [x] 3.1 On a sandbox config (`python radark/sandbox/make_sandbox.py <tmp>`), run `python -m radark --config <tmp>/harness.toml dry-run`, then with `--keep-awake off`, with `--keep-awake` and with `--until 12:00`; verify the first and last print `Would keep awake: whole run (default; --keep-awake off lets the computer sleep)`, the second no keep-awake line, the third `Would keep awake: whole run`; record the exact texts for `ho done`
 - [x] 3.2 Commit locally (no push, tag, release or reinstall) with a message citing HO-20261113-xk2k; verify `git status` is clean
-- [ ] 3.3 `ho done HO-20261113-xk2k -m "..."` listing the change name, the commit(s), the test count, the exact start-line and `dry-run` texts (default, explicit `on`, `off`, `--until 12:00` alone), the D3 and D5 decisions, and any failing or flaky tests; then `ho sync`
+- [x] 3.3 `ho done HO-20261113-xk2k -m "..."` listing the change name, the commit(s), the test count, the exact start-line and `dry-run` texts (default, explicit `on`, `off`, `--until 12:00` alone), the D3 and D5 decisions, and any failing or flaky tests; then `ho sync`
 
 ## Notes
 
