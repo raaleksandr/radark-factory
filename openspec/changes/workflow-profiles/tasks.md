@@ -95,7 +95,7 @@ Risks). Assumptions are marked in `design.md`.
   never hide with retries or skips). Record the test count and every console or prompt difference for `openspec`
   (expected: only the team-line profile column, D9) under "Apply results". Check that nothing private is committed
   (no owner paths, product names, hub or run excerpts). Commit locally; no push, tag, release or reinstall.
-- [ ] 7.3 `ho done HO-20261114-du6k -m "..."` listing: change name `workflow-profiles`, commits, the new settings with
+- [x] 7.3 `ho done HO-20261114-du6k -m "..."` listing: change name `workflow-profiles`, commits, the new settings with
   defaults (`[workflow] profile = "openspec"`, `[workflow] dir = "workflows"`, `[[teams]] profile`), what changes for
   running pipelines (nothing unless they opt in; the profile column in the team line), any split remainder, test
   counts. This is the last step of apply; archiving and spec sync are a separate phase after the author closes the
