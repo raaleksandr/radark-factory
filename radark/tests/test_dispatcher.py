@@ -310,11 +310,11 @@ def test_progress_counts_from_first_session_across_triage(env, monkeypatch):
     assert d2.made_progress("app", A, LATER) == []
 
 
-def test_replay_p3uj_change_notes_stall_after_two_sessions(env):
+def test_replay_change_notes_stall_after_two_sessions(env):
     """2026-10-31 (no-loop N2): each apply session committed only a "still gated" note to the change's tasks.md."""
     import subprocess
-    p3 = "HO-20261031-p3uj"
-    change = "app-faster-provider"
+    blk = "HO-20261031-fg56"
+    change = "app-faster-resizing"
     repo = env.root / "repos" / "backend"
     tasks = repo / "openspec" / "changes" / change / "tasks.md"
     tasks.parent.mkdir(parents=True)
@@ -322,19 +322,19 @@ def test_replay_p3uj_change_notes_stall_after_two_sessions(env):
     for cmd in (["init", "-q"], ["config", "user.email", "t@example.com"], ["config", "user.name", "t"],
                 ["add", "-A"], ["commit", "-q", "-m", "start"]):
         subprocess.run(["git", "-C", str(repo), *cmd], check=True, capture_output=True)
-    env.set_hub({"inbox:backend": {"action_required": [item(p3, sender="product", my_state="acknowledged")]},
-                 f"show:{p3}": show(p3)})
+    env.set_hub({"inbox:backend": {"action_required": [item(blk, sender="product", my_state="acknowledged")]},
+                 f"show:{blk}": show(blk)})
     path = tasks.relative_to(repo).as_posix()
     env.set_claude([{"steps": [START, {"write": [path, f"- [x] 1.1 done\n- [ ] 2.1 paid bench\nre-check {n}\n"]},
                                {"cmd": ["git", "commit", "-q", "-am", "apply re-check, still gated"]}],
                      "result": {"result": "Still gated."}} for n in range(3)])
     lines = []
     d = Dispatcher(env.cfg(), out=lines.append)
-    d.state.ensure(p3, "backend").update(change=change, phase="apply")
+    d.state.ensure(blk, "backend").update(change=change, phase="apply")
     d.state.save()
     for _ in range(3):
         d.loop(once=True)
-    rec = d.state.get(p3)
+    rec = d.state.get(blk)
     assert len(env.claude_calls()) == 2  # no third session
     assert rec["flags"]["stalled"] and rec["no_progress"] == 2
     assert [e.get("ignored") for e in log_events(env) if e["event"] == "no_progress"] == ["change_notes"] * 2

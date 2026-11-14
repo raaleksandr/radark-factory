@@ -60,6 +60,23 @@ GitHub URL of the `radark-handover` dependency (README, `pyproject.toml`).
    names; capitalized product-like names in examples; and item IDs (`ST-`, `BL-`, other prefixes) in titles that read
    like real product work. Radark-hub IDs are told apart by `ho show <ID>` against the radark hub.
 
+## Apply notes (2026-11-14)
+
+- All 15 IDs were replaced with one fixed mapping (same date part, invented suffix, order within a date kept); every
+  new ID was checked: not found in the radark hub, not present in the repository before.
+- Private titles became one invented story: an `app` item "BL-102 Cache layer", its `backend` part "Build the cache
+  layer now: …", the deploy step "Deploy the cache layer to production now", the console example "Add a health check
+  endpoint to the backend API server (BL-11)" (same length as before, so the two-line console test keeps its
+  meaning), and "Import contacts from a CSV file and merge…" in the time-limit examples.
+- The sweep also replaced, as a precaution, change names and titles in tests and in the main spec that looked
+  copied from real runs (`add-…`, `deploy-…`, `…-close-reason`, two "provider" titles and change names), test
+  variable and function names and one comment that spelled a real ID's suffix.
+- No golden file contained a replaced ID (decision 4 needed no action).
+- Assumption: `docs/research/workflow-today.md` keeps its description of the team setup (neutral team names, neutral
+  `D:\work\…` paths, tech stacks); it names no product, user or company and was not in the handover's list.
+- Every other `HO-` ID left in the repository is either invented (not in the radark hub) or found in the radark hub
+  (provenance).
+
 ## Risks / Trade-offs
 
 - [A test asserts on ordering, age or shortened suffixes of an ID] → keep the date part, pick suffixes that keep

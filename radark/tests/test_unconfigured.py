@@ -6,9 +6,9 @@ import subprocess
 from radark.__main__ import Dispatcher, main
 from radark.tests.conftest import START, TEAMS, item, show, write_config
 
-V = "HO-20261025-vozr"  # the sender's item
-G = "HO-20261025-ghyl"  # its handover to `backend`
-G_TITLE = "Build ST-35 now: store why a the product run ended (BL-003)"
+V = "HO-20261025-pq34"  # the sender's item
+G = "HO-20261025-mn12"  # its handover to `backend`
+G_TITLE = "Build the cache layer now: store the last sync time (BL-102)"
 SESSION = "72435567-f1f6-4a4d-8c1e-17d393fff2eb"
 
 
@@ -32,12 +32,12 @@ def disp(env):
 def with_item(env):
     """`app` worked on V and sent G to `backend`; V is still in its inbox."""
     two_teams(env)
-    env.set_hub({"list:app": {"items": [sent(G)]}, f"show:{V}": show(V, title="BL-003"),
+    env.set_hub({"list:app": {"items": [sent(G)]}, f"show:{V}": show(V, title="BL-102 Cache layer"),
                  f"show:{G}": show(G, title=G_TITLE),
-                 "inbox:app": {"action_required": [item(V, title="BL-003", my_state="acknowledged")]}})
+                 "inbox:app": {"action_required": [item(V, title="BL-102 Cache layer", my_state="acknowledged")]}})
     d = disp(env)
     rec = d.state.ensure(V, "app")
-    rec.update(phase="apply", title="BL-003")
+    rec.update(phase="apply", title="BL-102 Cache layer")
     rec["sessions"].append({"id": SESSION, "team": "app", "phase": "apply", "outcome": "finished",
                             "started": "2026-10-25T11:02:55.774Z", "ended": "2026-10-25T11:41:53.888Z"})
     d.state.save()
@@ -141,7 +141,7 @@ def test_entry_dropped_when_the_handover_no_longer_waits(env):
 
 def test_no_waiting_item_sends_standalone_handover(env):
     two_teams(env)
-    env.set_hub({"list:app": {"items": [sent(G, refs=("HO-20261010-aybd",))]}})
+    env.set_hub({"list:app": {"items": [sent(G, refs=("HO-20261010-cd34",))]}})
     d = disp(env)
     d.loop(once=True)
     [call] = new_calls(env)

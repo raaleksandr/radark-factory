@@ -254,16 +254,16 @@ def test_idle_invalid_verdict_logged(env, verdict):
 
 # ---- harness-no-loop-while-blocked N3: `BLOCKED: owner` escalates at once
 
-P3 = "HO-20261031-p3uj"
+BLK = "HO-20261031-fg56"
 BENCH = "BLOCKED: owner — go-ahead for a paid benchmark (up to $0.30)"
 
 
 def blocked_apply(env, steps=(), result=BENCH, lines=None, events=()):
-    env.set_hub({f"show:{P3}": show(P3, events, title="Faster provider"),
-                 "inbox:backend": {"action_required": [item(P3, title="Faster provider", my_state="acknowledged")]}})
+    env.set_hub({f"show:{BLK}": show(BLK, events, title="Faster image resizing"),
+                 "inbox:backend": {"action_required": [item(BLK, title="Faster image resizing", my_state="acknowledged")]}})
     env.set_claude([{"steps": [START, *steps], "result": {"result": f"Ran the free checks.\n{result}"}}] * 2)
     d = Dispatcher(env.cfg(), out=(lines.append if lines is not None else lambda *a: None))
-    d.state.ensure(P3, "backend").update(change="app-faster-provider", phase="apply")
+    d.state.ensure(BLK, "backend").update(change="app-faster-resizing", phase="apply")
     d.state.save()
     return d
 
@@ -274,7 +274,7 @@ def test_blocked_on_owner_escalates_after_one_session(env):
     d.loop(once=True)
     d.loop(once=True)
     assert len(env.claude_calls()) == 1  # not started again before the owner answers
-    rec = d.state.get(P3)
+    rec = d.state.get(BLK)
     reason = "blocked on the owner: go-ahead for a paid benchmark (up to $0.30)"
     assert rec["flags"]["escalated"] and rec["reason"] == reason and rec["no_progress"] == 0
     assert rec["sessions"][0]["outcome"] == "waiting_for_owner"
@@ -285,13 +285,13 @@ def test_blocked_on_owner_escalates_after_one_session(env):
     [call] = new_calls(env)
     assert call["team"] == "backend" and "--to" in call["args"] and "owner" in call["args"]
     assert any("paid benchmark" in a for a in call["args"])
-    assert any(f"ESCALATED {P3} (backend): {reason}" in x for x in lines)
+    assert any(f"ESCALATED {BLK} (backend): {reason}" in x for x in lines)
 
 
 def test_blocked_line_after_the_phase_was_completed_is_ignored(env):
     d = blocked_apply(env, events=[(LATER, "backend", "done", "Done.")])
     d.loop(once=True)
-    rec = d.state.get(P3)
+    rec = d.state.get(BLK)
     assert not rec["flags"]["escalated"] and new_calls(env) == []
     assert log_events(env, "blocked_on_owner") == [] and rec["sessions"][0]["outcome"] == "finished"
 
@@ -299,16 +299,16 @@ def test_blocked_line_after_the_phase_was_completed_is_ignored(env):
 def test_no_blocked_line_keeps_the_old_rules(env):
     d = blocked_apply(env, result="Still working on it.")
     d.loop(once=True)
-    rec = d.state.get(P3)
+    rec = d.state.get(BLK)
     assert not rec["flags"]["escalated"] and rec["no_progress"] == 1 and new_calls(env) == []
     assert log_events(env, "blocked_on_owner") == []
 
 
 def test_blocked_line_after_an_answer_is_ignored(env):
     """An answered part (`ho respond`) completes the phase too (design N3: done, declined or answered)."""
-    d = blocked_apply(env, steps=[{"ho": ["respond", P3, "-m", "Answered."]}])
+    d = blocked_apply(env, steps=[{"ho": ["respond", BLK, "-m", "Answered."]}])
     d.loop(once=True)
-    assert not d.state.get(P3)["flags"]["escalated"] and log_events(env, "blocked_on_owner") == []
+    assert not d.state.get(BLK)["flags"]["escalated"] and log_events(env, "blocked_on_owner") == []
 
 
 # ---- fewer-owner-waits D8: one clear question for a denial
@@ -329,7 +329,7 @@ def test_denial_with_blocked_line_gives_one_clear_question(env):
     assert "## Denied" in body and "- PowerShell: `Remove-Item C:/cache -Recurse`" in body
     question = SUGGEST.split("— ", 1)[1]
     assert "## Question" in body and f"> {question}" in body
-    rec = d.state.get(P3)
+    rec = d.state.get(BLK)
     assert "permission denied: PowerShell" in rec["reason"] and rec["escalation"]["question"] == question
 
 

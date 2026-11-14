@@ -137,7 +137,7 @@ def test_timeout_resume_overrides_kept_session_for_same_team_only():
 
 # ---- waiting for a handover's result (wait-for-handover-result)
 
-V, G = "HO-20261025-vozr", "HO-20261025-ghyl"
+V, G = "HO-20261025-pq34", "HO-20261025-mn12"
 
 
 def test_part_finished_mirrors_ho_satisfied():

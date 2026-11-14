@@ -93,8 +93,8 @@ Every session the dispatcher starts, new or resumed, MUST also carry the long-wa
 - **THEN** the prompt asks the agent to continue `add-export` according to the return comments, and not to create a new change or archive
 
 #### Scenario: Propose cut before the change exists
-- **WHEN** the propose session for `HO-20261026-47ch` acknowledges the handover and then ends with an API error, and no change in `app` cites `HO-20261026-47ch`
-- **THEN** the console shows that propose created no change, and the next session for `HO-20261026-47ch` is propose, not apply
+- **WHEN** the propose session for `HO-20261026-rs56` acknowledges the handover and then ends with an API error, and no change in `app` cites `HO-20261026-rs56`
+- **THEN** the console shows that propose created no change, and the next session for `HO-20261026-rs56` is propose, not apply
 
 #### Scenario: Propose that failed after creating the change
 - **WHEN** a propose session ends with an error and gives no `CHANGE:` line, but a change `fix-scroll` in the team repository cites the handover ID
@@ -124,7 +124,7 @@ Every session the dispatcher starts, new or resumed, MUST also carry the long-wa
 The propose prompt SHALL tell a technical team that the change's tasks must not include archiving the change or syncing its specs, and that archive is a separate phase run after the author closes the handover. Every apply prompt, for a new or a returned handover, SHALL tell the team not to archive the change and not to sync its specs, and to end with `ho done`, leaving any archive task unchecked.
 
 #### Scenario: Propose prompt keeps archive out of the tasks
-- **WHEN** the dispatcher starts a propose session of `app` for `HO-20261104-l6tz`
+- **WHEN** the dispatcher starts a propose session of `app` for `HO-20261104-hk78`
 - **THEN** the prompt says the change's tasks must not include archiving or spec sync, because archive runs after the author closes the handover
 
 #### Scenario: Apply prompt for a new handover forbids archiving
@@ -143,11 +143,11 @@ The propose prompt SHALL tell a technical team that the change's tasks must not 
 The apply prompt SHALL tell a technical team that, when its work added an entry to its repository's own TODO or backlog or materially changed one, it names each entry in its `ho done` summary on a `Local TODO:` line (id, title, one line why), and omits the line otherwise. The review prompt SHALL tell the product team to decide for each named entry whether it belongs in the product backlog, record those that do, and state the decision in its close or return message.
 
 #### Scenario: Apply prompt asks for local TODO entries
-- **WHEN** the dispatcher starts an apply session of `backend` for `HO-20261103-pn6g`
+- **WHEN** the dispatcher starts an apply session of `backend` for `HO-20261103-mp90`
 - **THEN** the prompt asks `backend` to list, on a `Local TODO:` line of its `ho done` summary, every entry of its own TODO it added or materially changed, with id, title and one line why
 
 #### Scenario: Review prompt asks the product team to take them in
-- **WHEN** the dispatcher starts a review session of `product` for `HO-20261103-pn6g`
+- **WHEN** the dispatcher starts a review session of `product` for `HO-20261103-mp90`
 - **THEN** the prompt asks it to decide for each entry on a result's `Local TODO:` line whether it belongs in the product backlog, record those that do, and say what it decided when it closes or returns the handover
 
 #### Scenario: A missing backlog entry does not return the work
@@ -205,7 +205,7 @@ The dispatcher SHALL save each session's full event stream to its own file and c
 - **THEN** it counts as progress
 
 #### Scenario: Only a waiting note in the change
-- **WHEN** two consecutive apply sessions for HO-20261031-p3uj each end with one commit that changes only `openspec/changes/app-faster-provider/tasks.md`, with no more checked tasks and no hub activity
+- **WHEN** two consecutive apply sessions for HO-20261031-fg56 each end with one commit that changes only `openspec/changes/app-faster-resizing/tasks.md`, with no more checked tasks and no hub activity
 - **THEN** neither counts as progress, the console says the commits changed only the change's own files, and after the second the item is marked stalled and escalated to the owner
 
 #### Scenario: Change notes with real work
@@ -250,8 +250,8 @@ For a denial that was not escalated the dispatcher SHALL keep the `denial` event
 The apply and act prompts SHALL tell the worker: when it waits for another team's handover, stop without committing or commenting only to record that it still waits; when a decision is needed that its team's instructions (its `CLAUDE.md`, the owner's goal) allow the team to take, take it, record it in the change, inform the owner with a non-blocking handover (expecting only an acknowledgement) and continue; when only the owner can unblock it — what those instructions reserve for the owner, or, where they say nothing, a decision, money, credentials, a production step — end its final message with one line `BLOCKED: owner — <what is needed>`. When a work session ends with such a line as the last `BLOCKED:` line of its result and did not complete its phase (apply or act: the worker's part is not marked `done`, `declined` or answered), its outcome SHALL be `waiting_for_owner`, and the item MUST be escalated to the owner at once with the text after the dash as the reason, without waiting for `no_progress_limit`. A session that completed its phase is handled as before, whatever its last line says. The console escalation line and the run log SHALL carry the reason.
 
 #### Scenario: Paid step needs the owner
-- **WHEN** an apply session of `backend` for HO-20261031-p3uj ends with `BLOCKED: owner — go-ahead for a paid benchmark (up to $0.30)` and `backend` has not answered the handover
-- **THEN** its outcome is `waiting_for_owner`, the owner receives an escalation handover naming the paid benchmark, and no further session is started for HO-20261031-p3uj until the owner answers
+- **WHEN** an apply session of `backend` for HO-20261031-fg56 ends with `BLOCKED: owner — go-ahead for a paid benchmark (up to $0.30)` and `backend` has not answered the handover
+- **THEN** its outcome is `waiting_for_owner`, the owner receives an escalation handover naming the paid benchmark, and no further session is started for HO-20261031-fg56 until the owner answers
 
 #### Scenario: Blocked line after the phase was completed
 - **WHEN** an apply session marks its part `done` and its final message also ends with a `BLOCKED: owner — …` line
@@ -308,7 +308,7 @@ Both limits SHALL count only time while the computer is awake. The dispatcher SH
 When a work session for a handover reaches its maximum duration and limit checks are on, the dispatcher SHALL NOT end it at once. It SHALL start a limit check consultation with the product team (the triage team, else the first product team) while the session keeps running. The check SHALL receive a digest of the session and return one verdict, `progressing` or `hung`, with a reason. It MUST NOT modify files, run `ho` write commands or contact other teams.
 
 #### Scenario: Check instead of a cut
-- **WHEN** a `app` apply session for HO-20261028-xaai reaches its maximum duration of 180 minutes
+- **WHEN** a `app` apply session for HO-20261028-vw90 reaches its maximum duration of 180 minutes
 - **THEN** the session is not ended, a limit check consultation starts in the product team's repository, and the console shows that the product team is asked whether the session is hung
 
 #### Scenario: Digest of the session
@@ -369,8 +369,8 @@ When a work session for a handover reaches its deadline with no extension left (
 The wrap-up prompt SHALL give the grace period, say the running step was cut off, and ask the session to check `git status`, start no new work, commit what works, report what is done the way its phase reports it, and name what is left on a `Left:` line. For apply it SHALL ask to check off finished tasks and report with `ho done` starting `Wrapped up at the time limit.`.
 
 #### Scenario: Apply wrap-up prompt
-- **WHEN** an apply session for HO-20261028-xaai is asked to wrap up with the default grace period
-- **THEN** the resumed session's prompt names the 15-minute grace period, asks to check `git status`, commit what works, check off finished tasks and report with `ho done HO-20261028-xaai` starting `Wrapped up at the time limit.` with a `Left:` line, and not to archive
+- **WHEN** an apply session for HO-20261028-vw90 is asked to wrap up with the default grace period
+- **THEN** the resumed session's prompt names the 15-minute grace period, asks to check `git status`, commit what works, check off finished tasks and report with `ho done HO-20261028-vw90` starting `Wrapped up at the time limit.` with a `Left:` line, and not to archive
 
 ### Requirement: Outcome of a wrap-up
 The stopped first part SHALL be classified `interrupted` and MUST NOT count as an error. The step's outcome SHALL be the wrap-up session's outcome, and the item's progress SHALL be measured from the first part's start. A wrap-up session still running at the end of the grace period SHALL be ended by `max_time`, and the rules for a session ended by a time limit apply to it. The inactivity limit, the wake grace period and the owner's Ctrl+C SHALL apply to the wrap-up session as to any session.
@@ -431,7 +431,7 @@ When the computer wakes while a session runs, the dispatcher SHALL give the sess
 The dispatcher SHALL keep in its state a record of the running session (session ID, team, handover, phase, process) until its end has been processed. When `run` or `once` starts and finds such a record left by a dispatcher that is no longer running, it SHALL end any leftover process of that session, print a `!` line, write an `interrupted` run-log event and treat the session as `interrupted` (cause: dispatcher stopped). A second Ctrl+C makes the session `interrupted` with cause owner.
 
 #### Scenario: Window closed during apply
-- **WHEN** the owner closes the dispatcher's window during an `apply` session of HO-20261024-d6zr and starts `run` again the next morning
+- **WHEN** the owner closes the dispatcher's window during an `apply` session of HO-20261024-gh78 and starts `run` again the next morning
 - **THEN** the dispatcher prints that the session was interrupted and logs an `interrupted` event, and the session counts as `interrupted`
 
 #### Scenario: Owner ends a session with Ctrl+C
@@ -442,11 +442,11 @@ The dispatcher SHALL keep in its state a record of the running session (session 
 The next session of an item whose session was `interrupted` SHALL resume that session in its own context, with a message naming the cause, saying the working tree may hold a partial edit, and asking to check the state and continue the phase. If the resume fails, a fresh session of the phase SHALL start. An interrupted step without a handover (goal check, idle ask, triage consultation) SHALL instead be run again when it is due.
 
 #### Scenario: Resumed after a wake
-- **WHEN** a `review` session of HO-20261024-d6zr was ended as `interrupted` after a sleep
+- **WHEN** a `review` session of HO-20261024-gh78 was ended as `interrupted` after a sleep
 - **THEN** the next step resumes it by its session ID with a message that the computer slept and to check the state and continue
 
 #### Scenario: Resumed after a restart
-- **WHEN** a new `run` found an interrupted `apply` session of HO-20261024-d6zr
+- **WHEN** a new `run` found an interrupted `apply` session of HO-20261024-gh78
 - **THEN** its first session for that item resumes the `apply` session by its session ID instead of starting a fresh one
 
 #### Scenario: Goal check interrupted
@@ -614,12 +614,12 @@ When an item is escalated or stalled, the dispatcher SHALL leave the item's hand
 - **THEN** the item is selectable again in the next loop
 
 #### Scenario: Waiting item escalated for a missing team
-- **WHEN** HO-20261025-ghyl from `app` to the unconfigured team `backend` references HO-20261025-vozr, an item of `app` the dispatcher works on
-- **THEN** HO-20261025-vozr is marked escalated and skipped by selection, and the owner's escalation handover from `app` references HO-20261025-vozr and says that HO-20261025-ghyl "Build ST-35 now…" waits for team `backend`, which is not set up in the dispatcher, naming the configuration file and the `[[teams]]` entry to add
+- **WHEN** HO-20261025-mn12 from `app` to the unconfigured team `backend` references HO-20261025-pq34, an item of `app` the dispatcher works on
+- **THEN** HO-20261025-pq34 is marked escalated and skipped by selection, and the owner's escalation handover from `app` references HO-20261025-pq34 and says that HO-20261025-mn12 "Build the cache layer now…" waits for team `backend`, which is not set up in the dispatcher, naming the configuration file and the `[[teams]]` entry to add
 
 #### Scenario: Owner answers after adding the team
 - **WHEN** the owner adds `backend` to the configuration, restarts the dispatcher and responds to that escalation handover
-- **THEN** HO-20261025-vozr is cleared and its session is resumed with the answer, and HO-20261025-ghyl is selected as work of `backend`
+- **THEN** HO-20261025-pq34 is cleared and its session is resumed with the answer, and HO-20261025-mn12 is selected as work of `backend`
 
 #### Scenario: No waiting item
 - **WHEN** a handover to an unconfigured team references no item of the sender that the dispatcher has a record of
@@ -629,11 +629,11 @@ When an item is escalated or stalled, the dispatcher SHALL leave the item's hand
 Before every new step the dispatcher SHALL look for open handovers sent by a configured team to a hub team that is neither configured nor the owner, whose recipient's part is not finished (as defined in *Waiting for a handover's result*). For each such handover it SHALL escalate once, as soon as it is found, write an `unconfigured_team` run-log event and print a `!` console line naming the team. `dry-run` SHALL list such handovers.
 
 #### Scenario: Forgotten team
-- **WHEN** `app` has sent HO-20261025-ghyl to `backend`, which is a hub team but not in the configuration, and `backend` has not acted on it
-- **THEN** before the next step the owner receives one escalation handover saying that HO-20261025-ghyl waits for team `backend`, which is not set up in the dispatcher, and the console shows a `!` line naming `backend`
+- **WHEN** `app` has sent HO-20261025-mn12 to `backend`, which is a hub team but not in the configuration, and `backend` has not acted on it
+- **THEN** before the next step the owner receives one escalation handover saying that HO-20261025-mn12 waits for team `backend`, which is not set up in the dispatcher, and the console shows a `!` line naming `backend`
 
 #### Scenario: Escalated once
-- **WHEN** the dispatcher has escalated HO-20261025-ghyl and the next loop iterations find it still open
+- **WHEN** the dispatcher has escalated HO-20261025-mn12 and the next loop iterations find it still open
 - **THEN** no further escalation is sent for it
 
 #### Scenario: Recipient finished
@@ -649,19 +649,19 @@ Before every new step the dispatcher SHALL look for open handovers sent by a con
 - **THEN** it is handled as before and not escalated by this rule
 
 #### Scenario: Dry run
-- **WHEN** the owner runs `dry-run` while HO-20261025-ghyl waits for the unconfigured team `backend`
+- **WHEN** the owner runs `dry-run` while HO-20261025-mn12 waits for the unconfigured team `backend`
 - **THEN** the output names the handover, its sender and `backend`, and says it would be escalated; nothing is sent
 
 ### Requirement: Waiting for a handover's result
 An item SHALL be held, not selected as work, while its team has an open handover that references it and has a recipient whose part is not finished. A part is finished as `ho` defines it per `expects`: `ack` acknowledged or declined, `done` done or declined, `response` answered or declined; `pending` and `returned` are never finished. Escalation handovers do not hold an item. The hold ends when every such handover is finished or closed. A return of the held item by its own sender SHALL release it for one session only: once a session of the item's team for that item has started after the latest return, the item is held again until the hold ends or the sender returns it again.
 
 #### Scenario: Waiting for a configured team
-- **WHEN** `app` has sent HO-20261025-ghyl, referencing its item HO-20261025-vozr, to the configured team `backend`, and `backend`'s part is pending
-- **THEN** HO-20261025-vozr is not selected, and `backend`'s HO-20261025-ghyl is selected although HO-20261025-vozr has newer hub activity
+- **WHEN** `app` has sent HO-20261025-mn12, referencing its item HO-20261025-pq34, to the configured team `backend`, and `backend`'s part is pending
+- **THEN** HO-20261025-pq34 is not selected, and `backend`'s HO-20261025-mn12 is selected although HO-20261025-pq34 has newer hub activity
 
 #### Scenario: Result arrives
-- **WHEN** `backend` marks HO-20261025-ghyl done
-- **THEN** the sender's review of HO-20261025-ghyl is selected as before, and HO-20261025-vozr is selectable again
+- **WHEN** `backend` marks HO-20261025-mn12 done
+- **THEN** the sender's review of HO-20261025-mn12 is selected as before, and HO-20261025-pq34 is selectable again
 
 #### Scenario: Part returned to the recipient
 - **WHEN** `app` returns its handover's part to `backend`
@@ -676,8 +676,8 @@ An item SHALL be held, not selected as work, while its team has an open handover
 - **THEN** the item is held until the owner answers or the request is closed
 
 #### Scenario: Item returned while it waits
-- **WHEN** `product` returns HO-20261031-7q4q to `app` while `app`'s HO-20261031-3yyl to `backend`, referencing it, is still pending
-- **THEN** one apply session of `app` for HO-20261031-7q4q is selected; after it ends without `ho done`, HO-20261031-7q4q is held again and `backend`'s HO-20261031-3yyl is selected next
+- **WHEN** `product` returns HO-20261031-de34 to `app` while `app`'s HO-20261031-bc12 to `backend`, referencing it, is still pending
+- **THEN** one apply session of `app` for HO-20261031-de34 is selected; after it ends without `ho done`, HO-20261031-de34 is held again and `backend`'s HO-20261031-bc12 is selected next
 
 #### Scenario: Returned again
 - **WHEN** a held item had its one session after a return and its sender returns it once more
@@ -695,12 +695,12 @@ An item SHALL be held, not selected as work, while its team has an open handover
 When an item starts being held the dispatcher SHALL print one console line naming the item, its team and each handover it waits for with the recipient and its state, and write a `waiting_for_handover` run-log event; when the hold ends it SHALL print one line and write `wait_ended`. `dry-run` SHALL list every held item with the handovers it waits for.
 
 #### Scenario: Hold starts and ends
-- **WHEN** HO-20261025-vozr starts waiting for HO-20261025-ghyl and later `backend` finishes it
-- **THEN** the console shows one line saying HO-20261025-vozr waits for HO-20261025-ghyl (`backend`, pending), and later one line saying it is selectable again; further loop iterations print nothing more about it
+- **WHEN** HO-20261025-pq34 starts waiting for HO-20261025-mn12 and later `backend` finishes it
+- **THEN** the console shows one line saying HO-20261025-pq34 waits for HO-20261025-mn12 (`backend`, pending), and later one line saying it is selectable again; further loop iterations print nothing more about it
 
 #### Scenario: Dry run
-- **WHEN** the owner runs `dry-run` while HO-20261025-vozr is held
-- **THEN** the output names HO-20261025-vozr, HO-20261025-ghyl, `backend` and the part's state, and HO-20261025-vozr is not offered as the next step
+- **WHEN** the owner runs `dry-run` while HO-20261025-pq34 is held
+- **THEN** the output names HO-20261025-pq34, HO-20261025-mn12, `backend` and the part's state, and HO-20261025-pq34 is not offered as the next step
 
 ### Requirement: Owner answer resumes the work
 On every loop iteration the dispatcher SHALL check the escalation handovers it sent. When the owner has responded, it SHALL clear the item's escalated or stalled mark, record the answer in the run log and resume the escalated agent session with a message that quotes the question and the owner's answer, as it does after product triage. When the owner has declined, it SHALL clear the mark and resume the session with the refusal and its reason, telling the agent to continue without that part. If the session cannot be resumed, it SHALL start a fresh session of the item's phase whose prompt includes the owner's answer. Progress of the resumed (or fresh) session SHALL be counted from the start of the escalated session, so hub activity of the session that asked counts. An answer on an escalation that the owner already cleared by hand MUST be ignored.
@@ -739,8 +739,8 @@ The console SHALL let the owner follow a run without the run log. When a session
 - **THEN** it prints the selected candidate, phase and prompt, starts no Claude Code session and changes nothing in the hub or any repository
 
 #### Scenario: Owner sees what is being worked on
-- **WHEN** the dispatcher starts an `apply` session of team `app` for handover `HO-20261024-sx7z` titled "The agent is told a slow page is loading, not failed (BL-049)" at 22:24 local time
-- **THEN** the console shows at most two lines naming 22:24, `app`, `apply`, `HO-20261024-sx7z` and the title, shortened if it does not fit one line
+- **WHEN** the dispatcher starts an `apply` session of team `app` for handover `HO-20261024-jk90` titled "Add a health check endpoint to the backend API server (BL-11)" at 22:24 local time
+- **THEN** the console shows at most two lines naming 22:24, `app`, `apply`, `HO-20261024-jk90` and the title, shortened if it does not fit one line
 
 #### Scenario: Owner sees how a session ended
 - **WHEN** that session finishes after 36 minutes
@@ -774,8 +774,8 @@ The console SHALL let the owner follow a run without the run log. When a session
 The dispatcher SHALL offer a read-only plan mode that prints, in order, the next steps it would take if every step succeeded, each with its team, phase, handover ID and title. The number of steps SHALL default to 5 and be settable by the owner. The mode SHALL start from the same hub and state snapshot as dry-run and pick every step with the rule of *Selecting the next work item*. It MUST NOT start a session or write to the hub, the state, the goal file, its goal record or the run log.
 
 #### Scenario: Five steps ahead
-- **WHEN** `backend` has a proposed change for handover `HO-20261026-rbkb` sent by `product`, `app` has a closed handover `HO-20261025-vozr` waiting for archive, and the owner asks for the plan of a goal run
-- **THEN** the steps are: `backend` apply `HO-20261026-rbkb`, `product` review `HO-20261026-rbkb`, `backend` archive `HO-20261026-rbkb`, `app` archive `HO-20261025-vozr`, `product` goal check
+- **WHEN** `backend` has a proposed change for handover `HO-20261026-tu78` sent by `product`, `app` has a closed handover `HO-20261025-pq34` waiting for archive, and the owner asks for the plan of a goal run
+- **THEN** the steps are: `backend` apply `HO-20261026-tu78`, `product` review `HO-20261026-tu78`, `backend` archive `HO-20261026-tu78`, `app` archive `HO-20261025-pq34`, `product` goal check
 
 #### Scenario: First step agrees with dry-run
 - **WHEN** the owner runs dry-run and plan on the same hub and state

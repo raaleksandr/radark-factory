@@ -14,10 +14,10 @@ from radark.__main__ import (Dispatcher, console_print, duration_text, end_line,
 from radark.runner import SessionResult
 from radark.tests.conftest import ASK_STEP, START, item, show, stop_step
 
-A = "HO-20261024-sx7z"
+A = "HO-20261024-jk90"
 B = "HO-20261024-bbbb"
 LATER = "2099-01-01T00:00:00.000Z"
-TITLE = "The agent is told a slow page is loading, not failed (BL-049)"
+TITLE = "Add a health check endpoint to the backend API server (BL-11)"
 HHMM = re.compile(r"^\d\d:\d\d  ")
 
 
@@ -143,9 +143,9 @@ def test_question_answered_by_triage_technical(env, utf8):
     disp(env, lines).loop(once=True)
     text = [x[7:] for x in lines]
     assert any(x.startswith(f'! app {A}: question for product triage: "Use a Map or a plain') for x in text)
-    assert any(x.startswith(f'product · triage consultation · {A}  "The agent is told') for x in text)
+    assert any(x.startswith(f'product · triage consultation · {A}  "Add a health check') for x in text)
     i = text.index(f"! app {A}: question went to product triage, verdict technical")
-    assert text[i + 1].startswith(f'app · propose · triage answer · {A}  "The agent is told')
+    assert text[i + 1].startswith(f'app · propose · triage answer · {A}  "Add a health check')
     assert [x for x in lines if len(x) > main_mod.LINE_WIDTH] == []
 
 

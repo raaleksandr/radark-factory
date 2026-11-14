@@ -300,11 +300,11 @@ escalations and triage, permission denials, failing checks, new handovers a sess
 
 ```
 Plan (if every step succeeds):
-  1. backend                 apply    HO-20261026-rbkb  Deploy ST-35 to production now, with the owner's new …
-  2. product  review   HO-20261026-rbkb  Deploy ST-35 to production now, with the owner's new …
+  1. backend                 apply    HO-20261026-tu78  Deploy the cache layer to production now, with the new …
+  2. product  review   HO-20261026-tu78  Deploy the cache layer to production now, with the new …
   --max-sessions 2 ends the run here
-  3. backend                 archive  HO-20261026-rbkb  Deploy ST-35 to production now, with the owner's new …
-  4. app          archive  HO-20261025-vozr  BL-003 …
+  3. backend                 archive  HO-20261026-tu78  Deploy the cache layer to production now, with the new …
+  4. app          archive  HO-20261025-pq34  BL-102 Cache layer
   5. product  goal check
 Stops: the next steps depend on the goal check's verdict.
 Assumes: reviews accept the work; no question escalates or goes to triage; no permission is denied; checks pass; …
@@ -409,13 +409,13 @@ a session found interrupted at start. Times are local `HH:MM`, `DD.MM HH:MM` whe
 durations made realistic):
 
 ```
-22:24  app · propose · HO-20261024-sx7z  "The agent is told a slow page is loading, not failed (BL-0…"
-22:31  ! app HO-20261024-sx7z: question for product triage: "Use a Map or a plain object for the cac…"
+22:24  app · propose · HO-20261024-jk90  "Add a health check endpoint to the backend API server (BL-…"
+22:31  ! app HO-20261024-jk90: question for product triage: "Use a Map or a plain object for the cac…"
 22:31  app · propose → question (7 min)
-22:31  product · triage consultation · HO-20261024-sx7z  "The agent is told a slow page is loadi…"
+22:31  product · triage consultation · HO-20261024-jk90  "Add a health check endpoint to the bac…"
 22:32  product · triage consultation → finished (48 s)
-22:32  ! app HO-20261024-sx7z: question went to product triage, verdict technical
-22:32  app · propose · triage answer · HO-20261024-sx7z  "The agent is told a slow page is loading,…"
+22:32  ! app HO-20261024-jk90: question went to product triage, verdict technical
+22:32  app · propose · triage answer · HO-20261024-jk90  "Add a health check endpoint to the backen…"
 23:08  app · propose · triage answer → finished (36 min)
 23:08  app · propose · HO-20261024-k2m9  "Show the retry button on a failed upload"
 23:33  app · propose → error, idle time limit (25 min)
@@ -423,7 +423,7 @@ durations made realistic):
 23:33  ! app HO-20261024-k2m9: no progress in this session (1 of 2 before the item stalls)
 11:14  ! computer slept 01:17–11:14 (9 h 57 min) - not counted
 11:17  product · review → interrupted, computer slept (5 min)
-11:17  product · review · resume after interruption · HO-20261024-d6zr  "Show the retry button on a fa…"
+11:17  product · review · resume after interruption · HO-20261024-gh78  "Show the retry button on a fa…"
 ```
 
 `·`, `→`, `…` and `–` are written only to a UTF-8 console (`$env:PYTHONIOENCODING = "utf-8"`); elsewhere they
@@ -680,8 +680,8 @@ escalation.
   or with `limit_checks = 0`. A check counts as a session of a goal run, never as progress. Console:
 
   ```
-  15:37  ! app HO-20261028-xaai: time limit after 3 h 00 min, asking product whether it is hung
-  15:37  product · limit check · HO-20261028-xaai  "The agent leaves the task and starts blind…"
+  15:37  ! app HO-20261028-vw90: time limit after 3 h 00 min, asking product whether it is hung
+  15:37  product · limit check · HO-20261028-vw90  "Import contacts from a CSV file and merge…"
   15:39  product · limit check → progressing, +60 min (2 min)
       It runs its final full e2e suite; new results every few minutes.
   ```
@@ -702,9 +702,9 @@ escalation.
   `wrap_up_minutes = 0`. Console:
 
   ```
-  21:37  ! app HO-20261028-xaai: time limit after 6 h 00 min, 3 extensions used; asking the session to wrap up within 15 min
+  21:37  ! app HO-20261028-vw90: time limit after 6 h 00 min, 3 extensions used; asking the session to wrap up within 15 min
   21:37  app · apply → interrupted, asked to wrap up (6 h 00 min)
-  21:37  app · apply · wrap-up · HO-20261028-xaai  "The agent leaves the task and starts blind…"
+  21:37  app · apply · wrap-up · HO-20261028-vw90  "Import contacts from a CSV file and merge…"
   21:45  app · apply · wrap-up → finished (8 min)
   ```
 

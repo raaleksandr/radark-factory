@@ -118,8 +118,8 @@ When a work session for a handover reaches its deadline with no extension left (
 The wrap-up prompt SHALL give the grace period, say the running step was cut off, and ask the session to check `git status`, start no new work, commit what works, report what is done the way its phase reports it, and name what is left on a `Left:` line. For apply it SHALL ask to check off finished tasks and report with `ho done` starting `Wrapped up at the time limit.`.
 
 #### Scenario: Apply wrap-up prompt
-- **WHEN** an apply session for HO-20261028-xaai is asked to wrap up with the default grace period
-- **THEN** the resumed session's prompt names the 15-minute grace period, asks to check `git status`, commit what works, check off finished tasks and report with `ho done HO-20261028-xaai` starting `Wrapped up at the time limit.` with a `Left:` line, and not to archive
+- **WHEN** an apply session for HO-20261028-vw90 is asked to wrap up with the default grace period
+- **THEN** the resumed session's prompt names the 15-minute grace period, asks to check `git status`, commit what works, check off finished tasks and report with `ho done HO-20261028-vw90` starting `Wrapped up at the time limit.` with a `Left:` line, and not to archive
 
 ### Requirement: Outcome of a wrap-up
 The stopped first part SHALL be classified `interrupted` and MUST NOT count as an error. The step's outcome SHALL be the wrap-up session's outcome, and the item's progress SHALL be measured from the first part's start. A wrap-up session still running at the end of the grace period SHALL be ended by `max_time`, and the rules for a session ended by a time limit apply to it. The inactivity limit, the wake grace period and the owner's Ctrl+C SHALL apply to the wrap-up session as to any session.

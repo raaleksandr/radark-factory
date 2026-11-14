@@ -28,7 +28,7 @@ Every repository has the same setup: OpenSpec (`openspec/`, schema `spec-driven`
 - Sender actions: `ho return <ID> --to <team> -m` (rework), `ho close <ID>` (accept and archive), `ho new --to … --expects … --title … --body-file … --json`.
 - Errors in JSON with exit codes 1 (bad input), 2 (not found), 3 (action not allowed now), 4 (hub integrity).
 
-IDs look like `HO-20261013-j7lg`. A harness can learn who has work by running `ho inbox --json` with `HO_TEAM` set to each team in turn.
+IDs look like `HO-20261013-ef56`. A harness can learn who has work by running `ho inbox --json` with `HO_TEAM` set to each team in turn.
 
 ## How a task moves today
 

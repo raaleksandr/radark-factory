@@ -4,13 +4,13 @@ import json
 from radark.__main__ import Dispatcher, main
 from radark.tests.conftest import START, item, show
 
-V = "HO-20261025-vozr"  # app's item
-G = "HO-20261025-ghyl"  # its handover to `backend`
+V = "HO-20261025-pq34"  # app's item
+G = "HO-20261025-mn12"  # its handover to `backend`
 OLD, NEW = "2026-10-25T11:03:38.126Z", "2026-10-25T12:30:00.000Z"
 
 
 def sent(recipients=None, status="open"):
-    return {"id": G, "title": "Build ST-35", "from": "app", "to": ["backend"], "expects": "done",
+    return {"id": G, "title": "Build the cache layer", "from": "app", "to": ["backend"], "expects": "done",
             "status": status, "refs": [V], "recipients": recipients or {"backend": "pending"},
             "created": OLD, "last_activity": OLD}
 
@@ -18,15 +18,15 @@ def sent(recipients=None, status="open"):
 def setup(env, site_inbox=True):
     """`app` sent G to the configured team `backend`; V has newer hub activity than G."""
     env.set_hub({"list:app": {"items": [sent()]},
-                 f"show:{V}": show(V, [(NEW, "owner", "respond", "ok")], title="BL-003"),
-                 f"show:{G}": show(G, created=OLD, title="Build ST-35"),
-                 "inbox:app": {"action_required": [item(V, title="BL-003", my_state="acknowledged", last=NEW)]},
-                 "inbox:backend": {"action_required": [item(G, title="Build ST-35", sender="app", last=OLD)]
+                 f"show:{V}": show(V, [(NEW, "owner", "respond", "ok")], title="BL-102 Cache layer"),
+                 f"show:{G}": show(G, created=OLD, title="Build the cache layer"),
+                 "inbox:app": {"action_required": [item(V, title="BL-102 Cache layer", my_state="acknowledged", last=NEW)]},
+                 "inbox:backend": {"action_required": [item(G, title="Build the cache layer", sender="app", last=OLD)]
                                 if site_inbox else []}})
     lines = []
     d = Dispatcher(env.cfg(), out=lines.append)
     rec = d.state.ensure(V, "app")
-    rec.update(phase="apply", change="add-run-end-reason", title="BL-003")
+    rec.update(phase="apply", change="add-cache-layer", title="BL-102 Cache layer")
     d.state.save()
     return d, lines
 
@@ -79,7 +79,7 @@ def test_result_arrives_releases_the_item(env):
 
     def done(data):
         data["list:app"]["items"][0]["recipients"] = {"backend": "done"}
-        data["inbox:app"]["to_review"] = [item(G, title="Build ST-35", sender="app", last=NEW)]
+        data["inbox:app"]["to_review"] = [item(G, title="Build the cache layer", sender="app", last=NEW)]
     update_hub(env, done)
     held = d.update_holds(d.scan_sent())
     assert held == {} and "waiting_for" not in d.state.get(V)
@@ -134,8 +134,8 @@ def returned_setup(env, returns=(RET1,)):
     events = [(NEW, "owner", "respond", "ok")] + [(at, "product", "return", "Fix X.", "app")
                                                    for at in returns]
     update_hub(env, lambda data: data.update({
-        f"show:{V}": show(V, events, title="BL-003"),
-        "inbox:app": {"action_required": [item(V, title="BL-003", my_state="returned", last=returns[-1])]}}))
+        f"show:{V}": show(V, events, title="BL-102 Cache layer"),
+        "inbox:app": {"action_required": [item(V, title="BL-102 Cache layer", my_state="returned", last=returns[-1])]}}))
     return d, lines
 
 
@@ -181,42 +181,42 @@ def test_resume_after_timeout_still_selected(env):
     assert V in [c.handover for c in held_plan(d)]
 
 
-# 2026-10-31: product returned 7q4q to app while app's 3yyl to backend was pending
-Q7, Y3 = "HO-20261031-7q4q", "HO-20261031-3yyl"
+# 2026-10-31: product returned an item to app while app's part for backend was pending
+RET, PART = "HO-20261031-de34", "HO-20261031-bc12"
 R_AT, Y_AT = "2026-10-31T17:27:00.000Z", "2026-10-31T16:00:00.000Z"
 
 
 def replay_hub(env):
     env.set_hub({
-        "list:app": {"items": [{"id": Y3, "title": "Backend part", "from": "app", "to": ["backend"],
-                                        "expects": "done", "status": "open", "refs": [Q7],
+        "list:app": {"items": [{"id": PART, "title": "Backend part", "from": "app", "to": ["backend"],
+                                        "expects": "done", "status": "open", "refs": [RET],
                                         "recipients": {"backend": "pending"}, "created": Y_AT, "last_activity": Y_AT}]},
-        f"show:{Q7}": show(Q7, [(R_AT, "product", "return", "Report done again once backend has it.",
-                                 "app")], title="Flash provider"),
-        f"show:{Y3}": show(Y3, created=Y_AT, title="Backend part"),
-        "inbox:app": {"action_required": [item(Q7, title="Flash provider", my_state="returned", last=R_AT)]},
-        "inbox:backend": {"action_required": [item(Y3, title="Backend part", sender="app", last=Y_AT)]}})
+        f"show:{RET}": show(RET, [(R_AT, "product", "return", "Report done again once backend has it.",
+                                 "app")], title="Offline mode"),
+        f"show:{PART}": show(PART, created=Y_AT, title="Backend part"),
+        "inbox:app": {"action_required": [item(RET, title="Offline mode", my_state="returned", last=R_AT)]},
+        "inbox:backend": {"action_required": [item(PART, title="Backend part", sender="app", last=Y_AT)]}})
     d = Dispatcher(env.cfg(), out=lambda *a: None)
-    d.state.ensure(Q7, "app").update(phase="apply", change="flash-provider", title="Flash provider")
+    d.state.ensure(RET, "app").update(phase="apply", change="offline-mode", title="Offline mode")
     d.state.save()
     return d
 
 
-def test_replay_7q4q_site_goes_after_one_return_session(env):
+def test_replay_return_site_goes_after_one_return_session(env):
     d = replay_hub(env)
-    assert [(c.team, c.handover) for c in held_plan(d)] == [("app", Q7), ("backend", Y3)]
+    assert [(c.team, c.handover) for c in held_plan(d)] == [("app", RET), ("backend", PART)]
     env.set_claude([{"steps": [START], "result": {"result": "Backend part still pending; stopping."}}])
     assert d.loop(once=True) == 0
     [call] = env.claude_calls()
-    assert call["cwd"].endswith("app") and Q7 in call["argv"][1]
-    assert [(c.team, c.handover) for c in held_plan(d)] == [("backend", Y3)]
+    assert call["cwd"].endswith("app") and RET in call["argv"][1]
+    assert [(c.team, c.handover) for c in held_plan(d)] == [("backend", PART)]
 
 
-def test_replay_7q4q_plan_predicts_the_same_order(env, capsys):
+def test_replay_return_plan_predicts_the_same_order(env, capsys):
     replay_hub(env)
     capsys.readouterr()
     assert main(["--config", str(env.config_path), "plan", "--steps", "2"]) == 0
     out = capsys.readouterr().out
     first, second = [x for x in out.splitlines() if x.lstrip().startswith(("1.", "2."))][:2]
-    assert "app" in first and Q7 in first
-    assert "backend" in second and Y3 in second
+    assert "app" in first and RET in first
+    assert "backend" in second and PART in second

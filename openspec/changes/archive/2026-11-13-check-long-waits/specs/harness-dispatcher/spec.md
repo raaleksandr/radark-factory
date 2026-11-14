@@ -21,8 +21,8 @@ Every session the dispatcher starts, new or resumed, MUST also carry the long-wa
 - **THEN** the prompt asks the agent to continue `add-export` according to the return comments, and not to create a new change or archive
 
 #### Scenario: Propose cut before the change exists
-- **WHEN** the propose session for `HO-20261026-47ch` acknowledges the handover and then ends with an API error, and no change in `app` cites `HO-20261026-47ch`
-- **THEN** the console shows that propose created no change, and the next session for `HO-20261026-47ch` is propose, not apply
+- **WHEN** the propose session for `HO-20261026-rs56` acknowledges the handover and then ends with an API error, and no change in `app` cites `HO-20261026-rs56`
+- **THEN** the console shows that propose created no change, and the next session for `HO-20261026-rs56` is propose, not apply
 
 #### Scenario: Propose that failed after creating the change
 - **WHEN** a propose session ends with an error and gives no `CHANGE:` line, but a change `fix-scroll` in the team repository cites the handover ID

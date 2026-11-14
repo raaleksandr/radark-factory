@@ -187,25 +187,25 @@ def test_skipped_items_are_not_predicted():
 
 # ---- 2.6 the spec's "Five steps ahead" (hub of 2026-10-26)
 
-RBKB, VOZR, GHYL = "HO-20261026-rbkb", "HO-20261025-vozr", "HO-20261025-ghyl"
+DEPLOY, ITEM, PART = "HO-20261026-tu78", "HO-20261025-pq34", "HO-20261025-mn12"
 
 
 def test_five_steps_ahead():
     ack = "2026-10-26T15:00:57.335Z"
-    inboxes = {"backend": inbox([item(RBKB, title="Deploy ST-35 to production now", my_state="acknowledged", last=ack)]),
+    inboxes = {"backend": inbox([item(DEPLOY, title="Deploy the cache layer to production now", my_state="acknowledged", last=ack)]),
                "app": inbox(), "product": inbox()}
-    shows = {RBKB: hshow(RBKB, to=("backend",), states={"backend": "acknowledged"}, created="2026-10-26T13:55:05.700Z",
-                         events=[(ack, "backend", "ack", "")], title="Deploy ST-35 to production now"),
-             VOZR: hshow(VOZR, status="closed", title="BL-003", created="2026-10-25T08:00:00.000Z",
+    shows = {DEPLOY: hshow(DEPLOY, to=("backend",), states={"backend": "acknowledged"}, created="2026-10-26T13:55:05.700Z",
+                         events=[(ack, "backend", "ack", "")], title="Deploy the cache layer to production now"),
+             ITEM: hshow(ITEM, status="closed", title="BL-102 Cache layer", created="2026-10-25T08:00:00.000Z",
                          events=[("2026-10-25T16:20:00.000Z", "app", "done", ""),
                                  ("2026-10-25T17:10:00.000Z", "product", "close", "")])}
-    records = {RBKB: rec("backend", change="deploy-st-35", phase="propose"),
-               VOZR: rec("app", change="add-run-end-reason", phase="done"),
-               GHYL: rec("backend", change="app-run-close-reason", phase="archived")}
+    records = {DEPLOY: rec("backend", change="deploy-cache-layer", phase="propose"),
+               ITEM: rec("app", change="add-cache-layer", phase="done"),
+               PART: rec("backend", change="backend-cache-layer", phase="archived")}
     f = forecast.simulate(TEAMS, inboxes, shows, records, {}, 5, "2026-10-26T15:30:00.000Z", goal=True,
                           product="product")
-    assert path(f) == [("backend", "apply", RBKB), ("product", "review", RBKB), ("backend", "archive", RBKB),
-                       ("app", "archive", VOZR), ("product", "goal check", None)]
+    assert path(f) == [("backend", "apply", DEPLOY), ("product", "review", DEPLOY), ("backend", "archive", DEPLOY),
+                       ("app", "archive", ITEM), ("product", "goal check", None)]
     assert "verdict" in f.stop
 
 

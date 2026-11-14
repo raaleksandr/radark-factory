@@ -87,7 +87,7 @@ def test_timeout_resume_message():
 
 def checked_session():
     from radark.runner import SessionResult
-    r = SessionResult(run_id="run-1", session_id="s", team="app", handover="HO-20261028-xaai", phase="apply",
+    r = SessionResult(run_id="run-1", session_id="s", team="app", handover="HO-20261028-vw90", phase="apply",
                       started="", stream_path="C:/run/sessions/run-1.jsonl")
     r.awake_start, r.last_event_at = 1000.0, 1000.0 + 178 * 60
     for i in range(10):
@@ -103,7 +103,7 @@ def checked_session():
 def test_session_digest():
     now = 1000.0 + 180 * 60
     text = prompts.session_digest(checked_session(), now, ["commits", "tasks"])
-    assert "Team `app`, handover HO-20261028-xaai, phase apply." in text
+    assert "Team `app`, handover HO-20261028-vw90, phase apply." in text
     assert "Running for 3 h 00 min" in text and "heartbeat was 2 min ago" in text
     assert "Tool running now: Bash, for 12 min." in text
     assert "Progress since the session started: new commits, newly checked tasks." in text
