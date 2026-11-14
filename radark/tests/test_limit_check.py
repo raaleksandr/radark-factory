@@ -77,7 +77,7 @@ def test_progressing_session_is_extended_and_finishes(env):
     assert f"product {sym('·')} limit check {sym('·')} {A}" in text
     assert f"product {sym('·')} limit check {sym('→')} progressing, +1 min (" in text
     assert "    It runs its final e2e suite with steady output." in text
-    assert f"app {sym('·')} apply {sym('→')} finished (" in text
+    assert f"app {sym('·')} apply {sym('·')} {A} {sym('→')} finished (" in text
 
 
 def test_extensions_used_up_end_the_session_without_a_check(env):

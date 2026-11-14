@@ -20,7 +20,8 @@ Tested with Claude Code 2.1.302.
 - **Hub** — a directory (normally a Git repository) of Markdown handovers, edited only through the `ho` CLI
   from [radark-handover](https://github.com/raaleksandr/radark-handover) (installed with radark-factory).
 - **Dispatcher** (`radark`) — reads `ho inbox --json` for every team, picks the next step, launches Claude Code
-  with hooks injected through `--settings`, logs everything to its run directory.
+  with hooks injected through `--settings`, logs everything to its run directory. With `[loop] parallel_sessions`
+  above 1 it runs sessions of different repositories for unrelated work at the same time (one per repository).
 
 The dispatcher has no model and no credential of its own; agents run on your own Claude Code login.
 

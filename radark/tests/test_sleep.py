@@ -183,7 +183,7 @@ def test_running_record_during_a_session_only(env):
     env.set_claude([{"steps": [START, copy_state(env, "during.json")], "result": {"result": "Done."}}])
     d = disp(env)
     d.loop(once=True)
-    running = json.loads((env.root / "during.json").read_text(encoding="utf-8"))["meta"]["running"]
+    (running,) = json.loads((env.root / "during.json").read_text(encoding="utf-8"))["meta"]["running"].values()
     session = d.state.get(A)["sessions"][0]["id"]
     assert (running["session"], running["team"], running["handover"], running["phase"]) == (session, "app", A, "apply")
     assert running["pid"] > 0 and running["started"]
@@ -199,7 +199,7 @@ def test_running_record_for_a_goal_check(env):
     d = disp(env)
     d.start_goal(GoalRun(path, "Finish B-1.", 40, 12))
     assert d.loop() == 0
-    running = json.loads((env.root / "during.json").read_text(encoding="utf-8"))["meta"]["running"]
+    (running,) = json.loads((env.root / "during.json").read_text(encoding="utf-8"))["meta"]["running"].values()
     assert (running["phase"], running["handover"], running["team"]) == ("goal", None, "product")
     assert "running" not in json.loads((env.root / "run" / "state.json").read_text(encoding="utf-8"))["meta"]
 

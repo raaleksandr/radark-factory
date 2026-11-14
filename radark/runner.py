@@ -1,8 +1,10 @@
 """Launch one `claude -p` session, save its stream and classify the outcome (design D2, D3, D4, T1, T2)."""
 from __future__ import annotations
 
+import ctypes
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -64,6 +66,7 @@ class SessionResult:
     running_tool: tuple | None = None
     limit_reason: str | None = None  # the product team's reason when its limit check judged the session hung
     extensions_used: int = 0  # limit-check extensions granted before the last deadline (wrap-up W3)
+    isolated: bool = True  # False: no job object / process group, only the process tree is ended (parallel D5)
 
     def markers_of(self, event: str) -> list[dict]:
         return [m for m in self.markers if m.get("event") == event]
@@ -81,14 +84,24 @@ def write_session_settings(cfg: Config) -> Path:
         "Stop": [{"hooks": [entry("stop.py")]}],
         "StopFailure": [{"hooks": [entry("stop_failure.py")]}],
     }}
-    write_json_atomic(cfg.run_dir / "hook-config.json", {
+    _write_if_changed(cfg.run_dir / "hook-config.json", {
         "default_answer": cfg.default_answer,
         "escalation_keywords": cfg.escalation_keywords,
         "triage_teams": cfg.triage.teams if cfg.triage else [],
     })
     path = cfg.run_dir / "session-settings.json"
-    write_json_atomic(path, settings)
+    _write_if_changed(path, settings)
     return path
+
+
+def _write_if_changed(path: Path, data) -> None:
+    """Not rewritten when unchanged, so a parallel session reading it never meets a replace (parallel-sessions D1)."""
+    try:
+        same = json.loads(path.read_text(encoding="utf-8")) == data
+    except (OSError, ValueError):
+        same = False
+    if not same:
+        write_json_atomic(path, data)
 
 
 def session_temp_dir(cfg: Config, team: str) -> Path:
@@ -104,6 +117,7 @@ def session_env(base: dict, cfg: Config, team: str, handover: str | None, sessio
     env.pop("ANTHROPIC_API_KEY", None)  # a stray key would switch the agents to API billing
     env.pop("ANTHROPIC_AUTH_TOKEN", None)
     env.update({
+        "HARNESS_PARALLEL_SESSIONS": str(cfg.parallel_sessions),  # parallel-sessions D7
         "HARNESS_RUN_DIR": str(cfg.run_dir),
         "HARNESS_RUN_ID": run_id,
         "HARNESS_SESSION": session_id,
@@ -156,10 +170,105 @@ def kill_pid_tree(pid: int) -> None:
             pass
 
 
+# ---- a session's processes end with it (parallel-sessions D5)
+
+JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
+
+
+class _IoCounters(ctypes.Structure):
+    _fields_ = [(name, ctypes.c_ulonglong) for name in (
+        "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+        "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
+
+
+class _BasicLimits(ctypes.Structure):
+    _fields_ = [("PerProcessUserTimeLimit", ctypes.c_longlong), ("PerJobUserTimeLimit", ctypes.c_longlong),
+                ("LimitFlags", ctypes.c_uint32), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", ctypes.c_uint32),
+                ("Affinity", ctypes.c_size_t), ("PriorityClass", ctypes.c_uint32),
+                ("SchedulingClass", ctypes.c_uint32)]
+
+
+class _ExtendedLimits(ctypes.Structure):
+    _fields_ = [("BasicLimitInformation", _BasicLimits), ("IoInfo", _IoCounters),
+                ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+
+_K32 = None
+
+
+def _kernel32():
+    global _K32
+    if _K32 is None:
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k.CreateJobObjectW.restype = ctypes.c_void_p
+        k.CreateJobObjectW.argtypes = (ctypes.c_void_p, ctypes.c_wchar_p)
+        k.SetInformationJobObject.argtypes = (ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32)
+        k.AssignProcessToJobObject.argtypes = (ctypes.c_void_p, ctypes.c_void_p)
+        k.TerminateJobObject.argtypes = (ctypes.c_void_p, ctypes.c_uint)
+        k.CloseHandle.argtypes = (ctypes.c_void_p,)
+        _K32 = k
+    return _K32
+
+
+class ProcessJob:
+    """Everything a session starts, also processes detached from its tree: a Windows job object with kill-on-close,
+    elsewhere the process group of `start_new_session=True` (parallel-sessions D5). `end()` ends them all; another
+    session's processes are in another job or group. `ok` is False when the job could not be made: then only the
+    process tree is ended."""
+
+    def __init__(self, proc: subprocess.Popen):
+        self.proc, self.handle = proc, None
+        self.ok = self._assign() if os.name == "nt" else True  # elsewhere the group ID is the process ID
+
+    def _assign(self) -> bool:
+        try:
+            k = _kernel32()
+            handle = k.CreateJobObjectW(None, None)
+            if not handle:
+                return False
+            info = _ExtendedLimits()
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            if (not k.SetInformationJobObject(handle, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION, ctypes.byref(info),
+                                              ctypes.sizeof(info))
+                    or not k.AssignProcessToJobObject(handle, int(self.proc._handle))):
+                k.CloseHandle(handle)
+                return False
+            self.handle = handle
+            return True
+        except (OSError, AttributeError, ValueError, TypeError):
+            return False
+
+    def end(self) -> None:
+        """End every process of the session; safe to call more than once."""
+        if os.name == "nt":
+            handle, self.handle = self.handle, None
+            if handle is not None:
+                k = _kernel32()
+                k.TerminateJobObject(handle, 1)
+                k.CloseHandle(handle)
+            elif self.proc.poll() is None:
+                kill_tree(self.proc)
+            return
+        try:
+            os.killpg(self.proc.pid, signal.SIGKILL)
+        except (OSError, AttributeError):
+            if self.proc.poll() is None:
+                kill_tree(self.proc)
+
+
+def make_job(proc: subprocess.Popen) -> ProcessJob:
+    """Replaced in tests to make job creation fail."""
+    return ProcessJob(proc)
+
+
 class Runner:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self.proc: subprocess.Popen | None = None
+        self.job: ProcessJob | None = None
         self.kill_requested = False
         self.clock = clock.awake  # session limits count awake time only (sleep-aware D1)
         (cfg.run_dir / "sessions").mkdir(parents=True, exist_ok=True)
@@ -192,8 +301,15 @@ class Runner:
 
     def kill(self) -> None:
         self.kill_requested = True
-        if self.proc is not None:
-            kill_tree(self.proc)
+        self._end()
+
+    def _end(self) -> None:
+        """End the session's process and everything it started (parallel-sessions D5)."""
+        job, proc = self.job, self.proc
+        if job is not None:
+            job.end()
+        elif proc is not None:
+            kill_tree(proc)
 
     def run(self, team: str, prompt: str, *, phase: str, handover: str | None = None,
             resume: str | None = None, tools: list[str] | None = None, json_schema: dict | None = None,
@@ -225,8 +341,11 @@ class Runner:
         self.kill_requested = False
         self.proc = subprocess.Popen(
             cmd, cwd=repo, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            creationflags=flags,
+            creationflags=flags, start_new_session=os.name != "nt",
         )
+        job = make_job(self.proc)  # right after the start, before claude starts any child (D5)
+        r.isolated = job.ok
+        self.job = job if job.ok else None
         if on_start is not None:
             on_start(session_id, run_id, self.proc.pid)
         stderr_chunks: list[bytes] = []
@@ -253,7 +372,7 @@ class Runner:
                 if answer and answer[0] == WRAP_UP:
                     if r.timeout_reason is None and r.interrupt_cause is None:
                         r.interrupt_cause = WRAP_UP
-                        kill_tree(self.proc)
+                        self._end()
                     expired = True
                 elif answer and answer[0]:
                     max_s += answer[0]
@@ -269,10 +388,10 @@ class Runner:
                       "idle_timeout" if t - last_event[0] > idle_s else None)
             if reason and r.timeout_reason is None and r.interrupt_cause is None:
                 r.timed_out, r.timeout_reason = True, reason
-                kill_tree(self.proc)
+                self._end()
             elif woke is not None and t - woke > grace_s and r.timeout_reason is None and r.interrupt_cause is None:
                 r.interrupt_cause = "sleep"
-                kill_tree(self.proc)
+                self._end()
             time.sleep(0.2)
         if check is not None and check.is_alive():  # the session ended first: its check is moot
             if on_deadline_abort is not None:
@@ -281,6 +400,9 @@ class Runner:
                 except Exception:
                     pass
             check.join(10)
+        if self.job is not None:  # leftovers end with the session, also after a normal end (D5)
+            self.job.end()
+            self.job = None
         out_thread.join(10)
         err_thread.join(10)
         r.killed = self.kill_requested

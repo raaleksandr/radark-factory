@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import config as config_mod
@@ -22,7 +23,7 @@ from . import prompts
 from . import select as sel
 from .awake import FORMS as KEEP_AWAKE_FORMS, KeepAwake, Keeper, cover_end_time, parse_keep_awake, wanted
 from .clock import Sleep, SleepWatch, awake, parse_until
-from .hub import Hub, HoError, check_ho
+from .hub import Hub, HoError, check_ho, hub_lock_message
 from .runner import WRAP_UP, Runner, SessionResult, kill_pid_tree
 from .state import GoalRun, RunLog, State, now_ts, read_goal, write_json_atomic
 
@@ -101,14 +102,81 @@ class Lock:
         self.path.unlink(missing_ok=True)
 
 
+# -- parallel sessions (parallel-sessions D1) -----------------------------------------------
+
+class BigLock:
+    """One re-entrant lock around all shared dispatcher state: state, run log, console, goal record, usage
+    readings. Dispatcher code runs while holding it; it is released only around waits (a session, a nap, waiting
+    for a worker), so a session never runs while the lock is held."""
+
+    def __init__(self):
+        self._lock = threading.RLock()
+        self._depth = threading.local()
+
+    def __enter__(self):
+        self._lock.acquire()
+        self._depth.n = getattr(self._depth, "n", 0) + 1
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._depth.n -= 1
+        self._lock.release()
+
+    @contextmanager
+    def released(self):
+        """Release the lock fully for a wait, then take it back as deep as before; a no-op when not held."""
+        n = getattr(self._depth, "n", 0)
+        for _ in range(n):
+            self._lock.release()
+        self._depth.n = 0
+        try:
+            yield
+        finally:
+            for _ in range(n):
+                self._lock.acquire()
+            self._depth.n = n
+
+
+class Work:
+    """One worker: a session's path to its end (run_candidate / resume_with_answer / idle ask / goal check) with
+    its own runner, limit-check runner and per-session fields (parallel-sessions D1)."""
+
+    def __init__(self, kind: str, team: str | None = None, repo: str | None = None, handover: str | None = None,
+                 runner: Runner | None = None):
+        self.kind, self.team, self.repo, self.handover = kind, team, repo, handover
+        self.runner, self.check_runner = runner, None
+        self.cleanup_pending: str | None = None  # key of the ended goal named in the prompt being built (D2)
+        self.running_id: str | None = None  # its entry in state.meta["running"]
+        self.info: dict | None = None  # team, handover, phase (and title) of its session now running
+        self.thread: threading.Thread | None = None
+        self.done, self.result, self.error = False, None, None
+
+
 # -- dispatcher -----------------------------------------------------------------------
 
 class Dispatcher:
     def __init__(self, cfg: config_mod.Config, hub: Hub | None = None, runner: Runner | None = None, out=None,
-                 watch: SleepWatch | None = None):
+                 watch: SleepWatch | None = None, runner_factory=None):
         self.cfg = cfg
         self.hub = hub or Hub(cfg.ho, cfg.hub)
         self.runner = runner
+        self.runner_factory = runner_factory or Runner  # a runner per parallel worker (tests inject fakes)
+        self.lock = BigLock()
+        self._local = threading.local()
+        self._serial = Work("serial")  # the context of the one-session path and of direct calls
+        self._sessions: dict[int, dict] = {}  # id(work) -> team, handover, phase of its running session
+        self.workers: list[Work] = []
+        self.runners: dict[str, Runner] = {}  # parallel workers' runners by team
+        self._wake = threading.Event()  # a worker ended
+        self._sleeps = 0  # sleeps reported so far: every running session applies its own wake grace (D9)
+        self._job_warned = False
+        self._parallel = False  # the parallel loop runs: SIGINT is handled by it
+        self._fatal: int | None = None
+        self._error: BaseException | None = None
+        self._goal_end: tuple[str, str] | None = None  # a goal verdict ended the run; ends after the workers (D3)
+        self._goal_wait_hub: str | None = None  # hub state of the last goal check that ran next to work (D3)
+        self._started_once = False
+        self._drain_note = False
         self._print = out or console_print
         self.state = State(cfg.run_dir / "state.json")
         self.log = RunLog(cfg.run_dir / "runs.jsonl")
@@ -122,18 +190,58 @@ class Dispatcher:
         self.keep_awake: KeepAwake = cfg.keep_awake  # `--keep-awake` replaces it for the run; never stored
         self.keeper: Keeper | None = None  # the thread that holds the Windows request (keep-awake D4)
         self.watch = watch or SleepWatch()
-        self._running: dict | None = None  # team, handover, phase of the session now running, for `suspend`
-        self.check_runner: Runner | None = None  # the limit check next to a work session (check-session D2)
         # idle re-ask by awake time (goal-ends-with-run D4): awake reading at the end of the last session or at start
         self._idle_mark = self.awake_now()
         self._idle_retry = False  # an interrupted idle ask runs again when the loop is idle (sleep-aware D6)
-        self._cleanup_pending: str | None = None  # key of the ended goal named in the prompt being built (D2)
+
+    # ---- per-worker context (parallel-sessions D1)
+
+    def ctx(self) -> Work:
+        return getattr(self._local, "work", None) or self._serial
+
+    @property
+    def check_runner(self) -> Runner | None:
+        """The limit check next to this context's work session (check-session D2)."""
+        return self.ctx().check_runner
+
+    @check_runner.setter
+    def check_runner(self, runner: Runner | None) -> None:
+        self.ctx().check_runner = runner
+
+    @property
+    def _cleanup_pending(self) -> str | None:
+        return self.ctx().cleanup_pending
+
+    @_cleanup_pending.setter
+    def _cleanup_pending(self, key: str | None) -> None:
+        self.ctx().cleanup_pending = key
+
+    @property
+    def _running(self):
+        """The running session (team, handover, phase) for `suspend`; a list when several run; None when none."""
+        infos = [{k: i[k] for k in ("team", "handover", "phase")} for i in self._sessions.values()]
+        return None if not infos else infos[0] if len(infos) == 1 else infos
+
+    def wip(self) -> list[dict]:
+        """Sessions of other workers running now, for the idle ask and the goal check (D3)."""
+        mine = id(self.ctx())
+        return [info for key, info in self._sessions.items() if key != mine]
+
+    def repo_key(self, team: str) -> str:
+        """A team's repository as a comparable key: two teams sharing one repository are one (D2)."""
+        try:
+            return os.path.normcase(str(Path(self.cfg.team(team).repo).resolve()))
+        except KeyError:
+            return team
 
     def awake_now(self) -> float:
         """Awake seconds from the sleep watch's clock (a fake one in tests)."""
         return getattr(self.watch, "clock", awake)()
 
     def get_runner(self) -> Runner:
+        work = self.ctx()
+        if work is not self._serial and work.runner is not None:
+            return work.runner
         if self.runner is None:
             self.runner = Runner(self.cfg)
         return self.runner
@@ -144,7 +252,8 @@ class Dispatcher:
         return self.check_runner
 
     def out(self, text: str = "") -> None:
-        self._print(text)
+        with self.lock:  # whole lines, never mixed (parallel-sessions D4)
+            self._print(text)
 
     def problem(self, text: str) -> None:
         """One marked console line for a problem, printed where it is logged (design D5)."""
@@ -152,10 +261,15 @@ class Dispatcher:
 
     def slept(self) -> Sleep | None:
         """Report a sleep of the computer once: console line, `suspend` event, goal run's slept time (design D2, D7)."""
+        with self.lock:
+            return self._slept()
+
+    def _slept(self) -> Sleep | None:
         self.keep_awake_changes()  # called on every loop and runner iteration (keep-awake D6)
         s = self.watch.check()
         if s is None:
             return None
+        self._sleeps += 1
         self.log.write("suspend", start=s.start, end=s.end, seconds=round(s.seconds), during=self._running)
         self.problem(f"computer slept {stamp(s.start)}{sym('–')}{stamp(s.end)} ({duration_text(s.seconds)}) "
                      "- not counted")
@@ -193,8 +307,8 @@ class Dispatcher:
         title = cand.title or rec.get("title")
         goal = self.goal_for(cand.team)
         if not cand.timeout_resume:
-            result = self.session(cand.team, self.work_prompt(cand, rec, goal), cand.phase, cand.handover,
-                                  resume=cand.resume_session, title=title)
+            result = self.session(cand.team, self.work_prompt(cand, rec, goal) + self.parallel_note(), cand.phase,
+                                  cand.handover, resume=cand.resume_session, title=title)
             return self.finish(cand, rec, result)
         rec.pop("resume_after_timeout", None)  # one resume per time-limited session (design T4)
         info = cand.timeout_resume
@@ -204,11 +318,13 @@ class Dispatcher:
         self.log.write("resume_after_timeout", team=cand.team, handover=cand.handover, session=info["session"],
                        reason=info.get("reason"), duration_s=info.get("duration_s"), phase=cand.phase)
         step = "resume after time limit" if info.get("reason") in TIME_LIMIT else "resume after interruption"
-        result = self.session(cand.team, prompts.timeout_resume_message(cand, info, lock.is_file(), goal), cand.phase,
-                              cand.handover, resume=info["session"], title=title, step=step)
+        result = self.session(cand.team, prompts.timeout_resume_message(cand, info, lock.is_file(), goal)
+                              + self.parallel_note(), cand.phase, cand.handover, resume=info["session"], title=title,
+                              step=step)
         if resume_failed(result):
             self.out(f"    session {info['session']} could not be resumed; starting a fresh {cand.phase} session")
-            result = self.session(cand.team, self.work_prompt(cand, rec, goal), cand.phase, cand.handover, title=title)
+            result = self.session(cand.team, self.work_prompt(cand, rec, goal) + self.parallel_note(), cand.phase,
+                                  cand.handover, title=title)
         return self.finish(cand, rec, result)
 
     def finish(self, cand: sel.Candidate, rec: dict, result: SessionResult, since: str | None = None) -> SessionResult:
@@ -220,9 +336,33 @@ class Dispatcher:
                 break
             result = resumed
         self.after_session(cand, rec, result, since)
-        self.state.meta.pop("running", None)  # its end is processed (design D6)
+        self.drop_running()  # its end is processed (design D6)
         self.state.save()
         return result
+
+    def running_records(self) -> dict[str, dict]:
+        """state.meta["running"] as {session ID: record}; a single record of an earlier version is read as one
+        (parallel-sessions D4)."""
+        runs = self.state.meta.get("running")
+        if isinstance(runs, dict) and "session" in runs and isinstance(runs.get("session"), (str, type(None))):
+            runs = {str(runs.get("session")): runs}
+        elif not isinstance(runs, dict):
+            runs = {}
+        self.state.meta["running"] = runs
+        return runs
+
+    def drop_running(self) -> None:
+        """Remove this worker's running record; the key goes when none is left."""
+        ctx = self.ctx()
+        runs = self.running_records()
+        runs.pop(ctx.running_id, None)
+        ctx.running_id = None
+        if not runs:
+            self.state.meta.pop("running", None)
+
+    def parallel_note(self) -> str:
+        """The parallel note of a work prompt when more than one session may run (parallel-sessions D7)."""
+        return "\n\n" + prompts.PARALLEL_NOTE if self.cfg.parallel_sessions > 1 else ""
 
     def _worker(self, cand: sel.Candidate) -> str:
         rec = self.state.get(cand.handover)
@@ -247,31 +387,55 @@ class Dispatcher:
                        prompt=prompt, resume=resume)
         if handover and not title:
             title = (self.state.get(handover) or {}).get("title")
-        for line in start_lines(team, phase, handover, title, step):
+        ctx = self.ctx()
+        self._sessions[id(ctx)] = ctx.info = {"team": team, "handover": handover, "phase": phase,
+                                              **({"title": title} if title else {})}
+        running = len(self._sessions) if self.cfg.parallel_sessions > 1 else 1
+        for line in start_lines(team, phase, handover, title, step, running):
             self.out(line)
         what = f"{team} {handover}" if handover else f"{team} {STEP_KIND.get(phase, phase)}"
         if self.goal:
             self.goal.sessions += 1
-        self._running = {"team": team, "handover": handover, "phase": phase}
 
         def on_start(session_id: str, run_id: str, pid: int) -> None:  # recovered by the next start (design D6)
-            self.state.meta["running"] = {"session": session_id, "run_id": run_id, "team": team, "handover": handover,
-                                          "phase": phase, "step": step, "pid": pid, "started": now_ts()}
-            self.state.save()
+            with self.lock:
+                runs = self.running_records()
+                runs.pop(ctx.running_id, None)  # a resume in the same worker replaces its record
+                ctx.running_id = session_id
+                runs[session_id] = {"session": session_id, "run_id": run_id, "team": team, "handover": handover,
+                                    "phase": phase, "step": step, "pid": pid, "started": now_ts()}
+                self.state.save()
+
+        seen = [self._sleeps]
+
+        def sleep_check() -> bool:  # a sleep reported by any thread counts for every running session (D9)
+            with self.lock:
+                self.slept()
+                new, seen[0] = self._sleeps != seen[0], self._sleeps
+            return new
 
         on_deadline, on_abort = (self.limit_watch(team, handover, title, since, base) if work and not wrap_up
                                  else (None, None))
-        old = signal.signal(signal.SIGINT, self._on_interrupt)
+        here = threading.current_thread() is threading.main_thread() and not self._parallel
+        old = signal.signal(signal.SIGINT, self._on_interrupt) if here else None
         try:
-            r = runner.run(team, prompt, phase=phase, handover=handover, resume=resume, tools=tools,
-                           json_schema=json_schema, timeout_s=self.cfg.wrap_up_minutes * 60 if wrap_up else None,
-                           on_usage=self.usage_watch(team, handover), on_start=on_start,
-                           sleep_check=self.slept, on_deadline=on_deadline, on_deadline_abort=on_abort)
+            with self.lock.released():  # the session runs without the lock (parallel-sessions D1)
+                r = runner.run(team, prompt, phase=phase, handover=handover, resume=resume, tools=tools,
+                               json_schema=json_schema, timeout_s=self.cfg.wrap_up_minutes * 60 if wrap_up else None,
+                               on_usage=self.usage_watch(team, handover), on_start=on_start,
+                               sleep_check=sleep_check, on_deadline=on_deadline, on_deadline_abort=on_abort)
         finally:
-            signal.signal(signal.SIGINT, old)
-            self._interrupts = 0
-            self._running = None
+            if here:
+                signal.signal(signal.SIGINT, old)
+                self._interrupts = 0
+            self._sessions.pop(id(ctx), None)
+            ctx.info = None
             self._idle_mark = self.awake_now()  # quiet awake time for the idle re-ask counts from here (D4)
+        if not getattr(r, "isolated", True) and not self._job_warned:  # parallel-sessions D5: logged once
+            self._job_warned = True
+            self.log.write("job_object_unavailable", team=team, handover=handover, session=r.session_id)
+            self.problem("a session's processes could not be put in a job object; only its process tree is ended "
+                         "when it ends")
         if work:  # a work session ends a run of regular tasks (goal-ends-with-run D0)
             self.state.meta.pop("idle_regular_streak", None)
         self.record_usage(r)
@@ -307,7 +471,7 @@ class Dispatcher:
                        timeout_reason=r.timeout_reason, interrupt_cause=r.interrupt_cause,
                        progress_sources=r.progress_sources,
                        stream=r.stream_path, result=r.result_text[-2000:])
-        self.out(end_line(team, phase, step, r))
+        self.out(end_line(team, phase, step, r, handover))  # always with the handover (parallel-sessions D4)
         if self.goal:
             self.goal.steps.append(end_line(team, phase, step, r, handover))
         if r.outcome == "error":
@@ -318,11 +482,11 @@ class Dispatcher:
             rec["sessions"].append({"id": r.session_id, "team": team, "phase": phase, "outcome": r.outcome,
                                     "started": r.started, "ended": r.ended, **({"base": base} if base else {})})
         if not work:  # a step without a handover is handled by its caller right away
-            self.state.meta.pop("running", None)
+            self.drop_running()
         # a session cut by a limit before its hooks ran is a hang, not a broken hook setup
         if (not r.hooks_loaded and r.exit_code is not None and not r.killed and not r.timed_out
                 and not r.interrupt_cause):
-            self.state.meta.pop("running", None)
+            self.drop_running()
             self.state.save()
             raise HooksNotLoaded(f"session {r.session_id}: the dispatcher's hooks did not fire")
         if r.outcome == "usage_limit":
@@ -367,20 +531,39 @@ class Dispatcher:
     def _on_interrupt(self, signum, frame) -> None:
         self._interrupts += 1
         self.stop_after_session = True
+        if not self._parallel:
+            if self._interrupts == 1:
+                self.out("\nFinishing the current session, then exiting; press Ctrl+C again to end it now.")
+            else:
+                self.out("\nEnding the current session.")
+                self.get_runner().kill()
+                if self.check_runner is not None:  # a limit check running next to it (check-session D2)
+                    self.check_runner.kill()
+            return
+        n = len(self.workers)  # parallel-sessions D1: every running session
         if self._interrupts == 1:
-            self.out("\nFinishing the current session, then exiting; press Ctrl+C again to end it now.")
-        else:
-            self.out("\nEnding the current session.")
-            self.get_runner().kill()
-            if self.check_runner is not None:  # a limit check running next to it (check-session D2)
-                self.check_runner.kill()
+            self.out(f"\nFinishing the {n} running session{'' if n == 1 else 's'}, then exiting; "
+                     "press Ctrl+C again to end them now.")
+            return
+        self.out(f"\nEnding the {n} running session{'' if n == 1 else 's'}.")
+        for w in list(self.workers):
+            for runner in (w.runner, w.check_runner):
+                if runner is not None:
+                    runner.kill()
 
     def recover(self) -> None:
-        """A session left running by a dispatcher that is gone (window closed, reboot, crash): end its leftover
-        process, and resume it next if it worked on a handover; a short step runs again when due (design D6)."""
-        run = self.state.meta.pop("running", None)
-        if not isinstance(run, dict):
-            return
+        """Sessions left running by a dispatcher that is gone (window closed, reboot, crash): each is handled as one
+        (parallel-sessions D4)."""
+        runs = self.running_records()
+        self.state.meta.pop("running", None)
+        for run in list(runs.values()):
+            if isinstance(run, dict):
+                self.recover_one(run)
+        self.state.save()
+
+    def recover_one(self, run: dict) -> None:
+        """End the leftover process, and resume the session next if it worked on a handover; a short step runs
+        again when due (design D6)."""
         pid, started = run.get("pid") or 0, iso_ts(run["started"]) if run.get("started") else 0
         created = process_started(pid) if pid_alive(pid) else None
         if created is not None and created <= started + 1:  # a later process only reuses the PID
@@ -510,12 +693,13 @@ class Dispatcher:
                     default=None)
         result = None
         if link.get("session"):
-            result = self.session(team, prompts.owner_resume_message(link, action, answer), phase, hid,
+            result = self.session(team, prompts.owner_resume_message(link, action, answer) + self.parallel_note(),
+                                  phase, hid,
                                   resume=link["session"], since=since, title=cand.title, step="owner answer")
         if result is None or resume_failed(result):
             self.out(f"    session {link.get('session')} could not be resumed; starting a fresh {phase} session")
             result = self.session(team, self.work_prompt(cand, rec, self.goal_for(team))
-                                  + prompts.owner_fresh_note(link, action, answer),
+                                  + prompts.owner_fresh_note(link, action, answer) + self.parallel_note(),
                                   phase, hid, since=since, title=cand.title, step="owner answer")
         return self.finish(cand, rec, result, since)
 
@@ -801,8 +985,14 @@ class Dispatcher:
         if checks <= 0 and not wrap:
             return None, None
         used, aborted = [0], threading.Event()
+        ctx = self.ctx()
 
         def on_deadline(r: SessionResult, elapsed: float) -> float | str | None:
+            self._local.work = ctx  # the runner's check thread works for this session's worker (parallel D1)
+            with self.lock:
+                return deadline(r, elapsed)
+
+        def deadline(r: SessionResult, elapsed: float) -> float | str | None:
             r.extensions_used = used[0]
             if used[0] >= checks:  # no extension left: wrap up, or end at the deadline without a check
                 return WRAP_UP if wrap else None
@@ -821,8 +1011,8 @@ class Dispatcher:
 
         def on_abort() -> None:  # the session ended while its check runs
             aborted.set()
-            if self.check_runner is not None:
-                self.check_runner.kill()
+            if ctx.check_runner is not None:
+                ctx.check_runner.kill()
         return on_deadline, on_abort
 
     def limit_check(self, check_team: str, r: SessionResult, elapsed: float, progress: list[str], used: int,
@@ -841,9 +1031,10 @@ class Dispatcher:
             self.out(line)
         if self.goal:  # every session counts in a goal run; saved by the main thread after the work session
             self.goal.sessions += 1
-        c = runner.run(check_team, prompts.limit_check_prompt(digest, self.goal.text if self.goal else None),
-                       phase="limit_check", handover=r.handover, tools=CONSULT_TOOLS, json_schema=prompts.LIMIT_SCHEMA,
-                       timeout_s=self.cfg.limit_check_minutes * 60)
+        with self.lock.released():
+            c = runner.run(check_team, prompts.limit_check_prompt(digest, self.goal.text if self.goal else None),
+                           phase="limit_check", handover=r.handover, tools=CONSULT_TOOLS,
+                           json_schema=prompts.LIMIT_SCHEMA, timeout_s=self.cfg.limit_check_minutes * 60)
         ignored = aborted.is_set()
         verdict = None if ignored or c.outcome != "finished" else parse_limit_verdict(c)
         extension = (self.cfg.limit_check_minutes if verdict and verdict["verdict"] == "progressing" else None)
@@ -894,11 +1085,12 @@ class Dispatcher:
             return "time"
         return None
 
-    def idle_ask(self) -> bool:
+    def idle_ask(self, cause: str | None = None) -> bool:
+        """`cause`: why it is due, when the caller has checked it already (parallel loop)."""
         team = self.product_team()
         if team is None:
             return False
-        cause = self.idle_due()
+        cause = cause or self.idle_due()
         if cause is None:
             return False
         latest, previous = self.hub_latest(), self.state.meta.get("last_idle_ask", "")
@@ -907,7 +1099,7 @@ class Dispatcher:
         self.state.save()
         blocked = self.goal_blocked_items()
         self.log.write("idle_ask", team=team, cause=cause, blocked=[b["handover"] for b in blocked])
-        prompt = prompts.idle_prompt(blocked, self.no_goal_for(team))
+        prompt = prompts.idle_prompt(blocked, self.no_goal_for(team), self.wip())
         r = self.session(team, prompt, "idle", None, json_schema=prompts.IDLE_SCHEMA)
         if r.outcome == "interrupted":  # asked again when due (sleep-aware D6)
             self.state.meta["last_idle_ask"] = previous
@@ -1254,7 +1446,7 @@ class Dispatcher:
         self.log.write("goal_check", team=team, guidance_changed=bool(notice))
         if notice:
             self.out("    the owner's guidance changed: goal check first")
-        r = self.session(team, prompts.goal_check_prompt(self.goal_for(team), notice), "goal", None,
+        r = self.session(team, prompts.goal_check_prompt(self.goal_for(team), notice, self.wip()), "goal", None,
                          json_schema=prompts.GOAL_SCHEMA)
         if r.outcome in ("usage_limit", "interrupted"):  # no verdict to judge: the check runs again
             return None
@@ -1269,7 +1461,13 @@ class Dispatcher:
             self.out(f"    goal: {verdict['status']} - {verdict['reason']}")
             if verdict["status"] in ("complete", "blocked"):
                 return verdict["status"], verdict["reason"]
-        moved = verdict is not None and self.hub_latest() > before
+        after = self.hub_latest()
+        moved = verdict is not None and after > before
+        if self.wip():  # it ran next to work: not asked again for this hub state; waiting is no stall (D3)
+            self._goal_wait_hub = after
+            if verdict is not None and not moved:
+                self.goal_save()
+                return None
         g.empty_continues = 0 if moved else g.empty_continues + 1
         self.goal_save()
         if g.empty_continues >= GOAL_STALL_LIMIT:
@@ -1320,6 +1518,10 @@ class Dispatcher:
         crossed = set()
 
         def on_usage(window: str, utilization: float, resets_at: float | None) -> None:
+            with self.lock:  # from the stream thread (parallel-sessions D9)
+                reading(window, utilization, resets_at)
+
+        def reading(window: str, utilization: float, resets_at: float | None) -> None:
             budget = self.budget.get(window)
             if window in crossed or percent(utilization) < (budget or self.cfg.usage_pause_percent):
                 return
@@ -1478,6 +1680,220 @@ class Dispatcher:
     # ---- loop (design D7)
 
     def loop(self, once: bool = False) -> int:
+        """One session at a time with `parallel_sessions = 1` (as before); otherwise the parallel loop."""
+        with self.lock:
+            if self.cfg.parallel_sessions > 1:
+                return self.loop_parallel(once)
+            return self.loop_serial(once)
+
+    # ---- parallel sessions (parallel-sessions D1-D4, D9)
+
+    def busy(self) -> tuple[set[str], set[str]]:
+        """Repositories and handovers with a running worker."""
+        return ({w.repo for w in self.workers if w.repo}, {w.handover for w in self.workers if w.handover})
+
+    def start_work(self, kind: str, team: str, handover: str | None, fn, *args) -> Work:
+        """Start a worker thread that runs `fn(*args)` to its end with its own runner (D1)."""
+        runner = self.runners.get(team)
+        if runner is None:
+            runner = self.runners[team] = self.runner_factory(self.cfg)
+        work = Work(kind, team, self.repo_key(team), handover, runner)
+        self._started_once = True
+
+        def body() -> None:
+            self._local.work = work
+            try:
+                with self.lock:
+                    work.result = fn(*args)
+            except BaseException as exc:  # handed to the main thread
+                work.error = exc
+            finally:
+                with self.lock:
+                    work.done = True
+                self._wake.set()
+
+        work.thread = threading.Thread(target=body, name=f"radark-{team}", daemon=True)
+        self.workers.append(work)
+        work.thread.start()
+        return work
+
+    def reap(self) -> None:
+        """Take the results of ended workers."""
+        for w in [w for w in self.workers if w.done]:
+            with self.lock.released():
+                w.thread.join(10)
+            self.workers.remove(w)
+            if self.runners.get(w.team) is w.runner and w.runner is not None and w.runner.proc is not None:
+                self.runners.pop(w.team, None)  # never reuse a runner whose session still looks alive
+            self._goal_wait_hub = None if w.kind != "goal" else self._goal_wait_hub
+            if isinstance(w.error, HooksNotLoaded):
+                self.log.write("hooks_not_loaded", detail=str(w.error))
+                self.problem(f"hooks not loaded: {w.error}. Stopping: check the hook setup (radark/README.md).")
+                self._fatal = 3
+            elif w.error is not None:
+                self._error = self._error or w.error
+            elif w.kind == "goal" and w.result:
+                self._goal_end = self._goal_end or w.result
+
+    def wait_workers(self, timeout: float) -> None:
+        """Wait without the lock until a worker ends or `timeout` passes; never past the end time."""
+        if self.until is not None:
+            timeout = max(0.0, min(timeout, self.until - time.time()))
+        with self.lock.released():
+            self._wake.wait(timeout)
+
+    def drain(self) -> None:
+        """Wait for every running worker (no new starts)."""
+        while self.workers:
+            self._wake.clear()
+            self.reap()
+            if self.workers:
+                self.wait_workers(5)
+
+    def ending(self, once: bool) -> str | None:
+        """Why no new session may start and the run ends after the running ones (spec: Run control with parallel
+        sessions); None to go on."""
+        if (self.cfg.run_dir / "STOP").exists():
+            return "STOP file found"
+        if self.goal and (limit := self.goal_limit()):
+            return limit
+        if self.until is not None and time.time() >= self.until:
+            return "end time reached"
+        if budget_reached(self.state.meta.get("usage"), self.budget, time.time()):
+            return "usage budget reached"
+        if self._fatal is not None or self._error is not None:
+            return "stopping after an error"
+        if self._goal_end:
+            return f"goal {self._goal_end[0]}"
+        if self.stop_after_session:
+            return "Ctrl+C"
+        if once and self._started_once:
+            return "once"
+        return None
+
+    def end_run(self) -> int:
+        """The run's end once no worker runs, in the order of the one-session loop."""
+        if self._error is not None:
+            raise self._error
+        if self._fatal is not None:
+            return self._fatal
+        if (self.cfg.run_dir / "STOP").exists():
+            self.log.write("stop")
+            self.out("STOP file found; exiting.")
+            return self.end_goal("stopped", "STOP file found") if self.goal else 0
+        if self.goal and (limit := self.goal_limit()):
+            return self.end_goal("limit", limit)
+        if (code := self.until_end()) is not None:
+            return code
+        if (code := self.budget_end()) is not None:
+            return code
+        if self._goal_end:
+            return self.end_goal(*self._goal_end)
+        if self.goal and self.stop_after_session:
+            return self.end_goal("stopped", "interrupted (Ctrl+C)")
+        return 0
+
+    def loop_parallel(self, once: bool = False) -> int:
+        """Up to `parallel_sessions` workers, at most one per repository and handover (D1, D2); whole-hub steps
+        next to running work (D3); stops stop new starts and the run ends after the last worker (D9)."""
+        here = threading.current_thread() is threading.main_thread()
+        old = signal.signal(signal.SIGINT, self._on_interrupt) if here else None
+        self._parallel = True
+        try:
+            return self._loop_parallel(once)
+        finally:
+            try:
+                self.drain()  # also after an exception: running sessions finish and are processed
+            finally:
+                self._parallel = False
+                if here:
+                    signal.signal(signal.SIGINT, old)
+
+    def _loop_parallel(self, once: bool) -> int:
+        paused = False
+        product = self.product_team()
+        while True:
+            self._wake.clear()
+            self.reap()
+            self.slept()
+            why = self.ending(once)
+            if why:
+                if not self.workers:
+                    return self.end_run()
+                if not self._drain_note:
+                    self._drain_note = True
+                    n = len(self.workers)
+                    self.out(f"{stamp()}  No new session ({why}); waiting for {n} running "
+                             f"session{'' if n == 1 else 's'}.")
+                self.wait_workers(1)
+                continue
+            if (self.cfg.run_dir / "PAUSE").exists():
+                if not paused:
+                    self.log.write("pause")
+                    self.out("Paused (PAUSE file); waiting.")
+                    paused = True
+                self.wait_workers(5)
+                continue
+            paused = False
+            self.usage_hold()
+            wait = self.state.meta.get("backoff_until", 0) - time.time()
+            if wait > 0:
+                if once and not self.workers:
+                    for line in usage_report(self):
+                        self.out(line)
+                    self.out(f"In usage-limit back-off for {int(wait // 60)} more min; nothing run.")
+                    return 0
+                self.usage_reminder(wait)
+                self.wait_workers(min(wait, 60))
+                continue
+            self.usage_resumed()
+            idle_wait = max(self.cfg.poll_seconds, 1) if self.workers else self.cfg.poll_seconds
+            if len(self.workers) >= self.cfg.parallel_sessions:
+                self.wait_workers(1)
+                continue
+            scan = self.scan_sent()
+            self.escalate_unconfigured(scan)
+            held = self.update_holds(scan)
+            if self.goal:
+                self.goal_refresh()
+            repos, handovers = self.busy()
+            product_free = product is not None and self.repo_key(product) not in repos
+            if self.goal and self.goal.pending:  # changed guidance: a goal check before anything else
+                if product_free:
+                    self.start_work("goal", product, None, self.goal_check)
+                else:
+                    self.wait_workers(idle_wait)
+                continue
+            answers = [a for a in self.owner_answers()
+                       if a[0] not in handovers and self.repo_key(a[1]["team"]) not in repos]
+            if answers:
+                self.start_work("answer", answers[0][1]["team"], answers[0][0], self.resume_with_answer, *answers[0])
+                continue
+            cands = self.plan(held)
+            cand = sel.pick_free(cands, repos, handovers, {t.id: self.repo_key(t.id) for t in self.cfg.teams})
+            if cand is not None:
+                self.start_work("work", cand.team, cand.handover, self.run_candidate, cand)
+                continue
+            if product_free and self.goal:
+                if not self.workers or self._goal_wait_hub != self.hub_latest():
+                    self.start_work("goal", product, None, self.goal_check)
+                    continue
+            elif product_free and self.cfg.idle_ask and (cause := self.idle_due()):
+                self.start_work("idle", product, None, self.idle_ask, cause)
+                continue
+            if not self.workers:
+                if once:
+                    self.out("Nothing to do.")
+                    return 0
+                self.nap_released(self.cfg.poll_seconds)
+                continue
+            self.wait_workers(idle_wait)
+
+    def nap_released(self, seconds: float) -> None:
+        with self.lock.released():
+            self.nap(seconds)
+
+    def loop_serial(self, once: bool = False) -> int:
         paused = False
         while True:
             self.slept()  # between sessions and after every wait: poll, PAUSE, usage wait, back-off
@@ -1719,10 +2135,12 @@ def step_parts(team: str, phase: str, step: str | None) -> list[str]:
     return [team, STEP_KIND.get(phase, phase)] + ([step] if step else [])
 
 
-def start_lines(team: str, phase: str, handover: str | None, title: str | None, step: str | None) -> list[str]:
-    """`HH:MM  team · phase · HO-ID  "title"`; the title moves to a second line when the head is long (design D1)."""
+def start_lines(team: str, phase: str, handover: str | None, title: str | None, step: str | None,
+                running: int = 1) -> list[str]:
+    """`HH:MM  team · phase · HO-ID  "title"`; the title moves to a second line when the head is long (design D1);
+    `(N running)` after the head when N sessions run, counting this one, and N > 1 (parallel-sessions D4)."""
     parts = step_parts(team, phase, step) + ([handover] if handover else [])
-    head = f"{stamp()}  " + f" {sym('·')} ".join(parts)
+    head = f"{stamp()}  " + f" {sym('·')} ".join(parts) + (f" ({running} running)" if running > 1 else "")
     if not title:
         return [head]
     room = LINE_WIDTH - len(head) - 4
@@ -2153,12 +2571,35 @@ def dry_run(d: Dispatcher) -> int:
     print(f"\nWould start: {c.team} in {d.cfg.team(c.team).repo}, phase {c.phase}, handover {c.handover}"
           + (f", resuming session {c.resume_session}" if c.resume_session else "")
           + (f" after its {c.timeout_resume.get('reason')}" if c.timeout_resume else ""))
+    if d.cfg.parallel_sessions > 1:
+        print(parallel_line(d, cands))
     lock = (d.cfg.team(c.team).repo / ".git" / "index.lock").is_file()
     goal = d.goal_for(c.team)
     no_goal = None if goal else d.no_goal_for(c.team)
     print("Prompt:\n" + (prompts.timeout_resume_message(c, c.timeout_resume, lock, goal) if c.timeout_resume
                          else prompts.phase_prompt(c, goal, no_goal=no_goal)))
     return 0
+
+
+def parallel_line(d: Dispatcher, cands: list[sel.Candidate]) -> str:
+    """The further sessions the loop would start next to the first one (parallel-sessions D8)."""
+    n, first = d.cfg.parallel_sessions, cands[0]
+    repo_of = {t.id: d.repo_key(t.id) for t in d.cfg.teams}
+    repos, handovers, more = {repo_of[first.team]}, {first.handover}, []
+    rest = list(cands)
+    while len(more) + 1 < n:
+        c = sel.pick_free(rest, repos, handovers, repo_of)
+        if c is None:
+            break
+        more.append(c)
+        rest.remove(c)
+        repos.add(repo_of[c.team])
+        handovers.add(c.handover)
+    if more:
+        return f"In parallel (parallel_sessions = {n}): " + "; ".join(f"{c.team} {c.phase} {c.handover}" for c in more)
+    why = ("no other candidate" if len(cands) == 1 else
+           "the other candidates are for a repository or handover that would be busy")
+    return f"In parallel: nothing else can start ({why})"
 
 
 def idle_dry_run(d: Dispatcher) -> list[str]:
@@ -2361,6 +2802,9 @@ def main(argv=None) -> int:
     ho = check_ho(cfg.ho, cfg.hub)  # before any other hub call (ho-contract-check D4)
     if isinstance(ho, str):
         print(f"ho incompatible: {ho}", file=sys.stderr)
+        return 2
+    if args.command != "plan" and cfg.parallel_sessions > 1 and not ho.hub_lock:  # parallel-sessions D6
+        print(f"ho incompatible: {hub_lock_message(ho, cfg.parallel_sessions)}", file=sys.stderr)
         return 2
     if args.command == "plan":
         if args.steps <= 0:

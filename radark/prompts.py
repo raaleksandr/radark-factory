@@ -317,11 +317,32 @@ def blocked_section(blocked: list[dict]) -> str:
     )
 
 
-def idle_prompt(blocked: list[dict] | None = None, notice: str | None = None) -> str:
+PARALLEL_NOTE = (  # parallel-sessions D7: work prompts when more than one session may run
+    "Another team may be working on this computer at the same time. Stop only processes you started yourself, by "
+    "their ID (never by name or image, never \"all node\" or \"any playwright\"); use no fixed shared ports or paths "
+    "outside your repository and your temp directory; expect runs to be slower than usual."
+)
+
+
+def work_in_progress(running: list[dict] | None) -> str:
+    """The work-in-progress section of the idle ask and the goal check (parallel-sessions D3); empty when nothing
+    else runs. running: [{team, handover, title, phase}]."""
+    if not running:
+        return ""
+    items = "; ".join(f"{w.get('team')} {w.get('handover') or '-'}"
+                      + (f" \"{' '.join(str(w['title']).split())}\"" if w.get("title") else "")
+                      + f" ({w.get('phase')})" for w in running)
+    return (f"Work in progress right now (other sessions are working on it): {items}. Hand over or start only work "
+            "that does not depend on these results and does not touch these handovers or the changes they work on; "
+            "do not report them as stalled.\n\n")
+
+
+def idle_prompt(blocked: list[dict] | None = None, notice: str | None = None, running: list[dict] | None = None) -> str:
     """The idle ask: the product team's whole choice of the next work (goal-ends-with-run D0, D3); `notice`: the
-    no-goal block of a run without a goal (D1, D2)."""
+    no-goal block of a run without a goal (D1, D2); `running`: sessions working now (parallel-sessions D3)."""
     return (
-        _HUB + "The other teams have no work waiting. Choose the next work by your team's usual task-choice rule (the "
+        _HUB + work_in_progress(running)
+        + "The other teams have no work waiting. Choose the next work by your team's usual task-choice rule (the "
         "rule your team's instructions name), from your backlog, your technical debt and your team's own regular "
         "tasks (the schedule your team's instructions name) together.\n\n"
         "A regular task that is overdue or due within a day goes first, in place of a usual task: do it yourself in "
@@ -516,9 +537,10 @@ def guidance_notice(given: str, current: str) -> str:
 GOAL_ONLY_THIS_RUN = "Only this run's goal sets the order of work; goals of earlier runs have ended."  # D6
 
 
-def goal_check_prompt(goal: str, notice: str = "") -> str:
+def goal_check_prompt(goal: str, notice: str = "", running: list[dict] | None = None) -> str:
     return _with_rule(
-        _HUB + "Goal check: the owner started a goal run, and no team has work waiting now.\n\n" + notice
+        _HUB + "Goal check: the owner started a goal run, and no team has work waiting now.\n\n"
+        + work_in_progress(running) + notice
         + "Compare the goal below with the hub (your handovers and their results), the backlog and what the "
         "teams have finished so far (closed handovers, archived OpenSpec changes). " + GOAL_ONLY_THIS_RUN + " Then:\n"
         "- if goal work is left that a team can do without the owner, hand over the next piece through the hub "

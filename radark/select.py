@@ -184,6 +184,18 @@ def pick(cands: list[Candidate]) -> Candidate | None:
     return found[0] if found else None
 
 
+def pick_free(cands: list[Candidate], busy_repos: set[str], busy_handovers: set[str],
+              repo_of: dict[str, str] | None = None) -> Candidate | None:
+    """The first candidate in `ordered` order whose repository and handover have no running session
+    (parallel-sessions D2). repo_of: team -> resolved repository path, so two teams sharing a repository count as
+    one; a team missing from it is its own repository."""
+    repo_of = repo_of or {}
+    for c in ordered(cands):
+        if repo_of.get(c.team, c.team) not in busy_repos and c.handover not in busy_handovers:
+            return c
+    return None
+
+
 def ordered(cands: list[Candidate]) -> list[Candidate]:
     by_team = sorted(cands, key=lambda c: (c.team_index, c.handover))
     return sorted(by_team, key=lambda c: c.recency, reverse=True)  # stable: ties keep team order

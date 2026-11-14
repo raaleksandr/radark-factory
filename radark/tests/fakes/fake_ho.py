@@ -8,7 +8,8 @@ Write commands change the file: `new` adds "show:<id>", a recipient inbox item a
 `teams` lists the teams of hub.json in HO_HUB.
 Timing keys (harness-survive-sleep): "_delay": {cmd: seconds} waits before answering; "_hang_once": [cmd] makes the
 next such call hang (60 s) and "_die_once": [cmd] makes it exit 1 with no output; either is used up by that call.
-`--version` (ho-contract-check D5) answers from "_version": absent -> version 0.2.0, contract 1; {"exit": N} -> exit N
+`--version` (ho-contract-check D5) answers from "_version": absent -> version 0.2.0, contract 1, features ["hub-lock"]
+(the hub lock, parallel-sessions D6; give a "_version" without "features" for an ho without it); {"exit": N} -> exit N
 with nothing on stdout (an ho too old for the flag); another dict -> printed as the JSON answer; a string -> printed
 as is (not JSON).
 Every call (and a stdin body) is appended to FAKE_HO_DATA + ".calls"."""
@@ -31,7 +32,8 @@ with open(path, encoding="utf-8") as fh:
     data = json.load(fh)
 
 if args and args[0] == "--version":
-    answer = data.get("_version", {"schema_version": 1, "version": "0.2.0", "contract": 1})
+    answer = data.get("_version", {"schema_version": 1, "version": "0.2.0", "contract": 1,
+                                       "features": ["hub-lock"]})
     if isinstance(answer, dict) and "exit" in answer:
         sys.exit(answer["exit"])
     print(answer if isinstance(answer, str) else json.dumps(answer))

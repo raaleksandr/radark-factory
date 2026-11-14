@@ -25,7 +25,7 @@ Runtime: Python 3.12, standard library only. Tests: `pytest`. Tested with Claude
 | `[launch]` `permission_mode`, `extra_args` | default `auto`; `bypassPermissions` and `--bare` are refused |
 | `[answers]` `default`, `escalation_keywords` | the "choose the best variant" text; words that send a question to the owner (matched at a word start, case-insensitive, `ё` = `е`; the defaults include Russian stems such as `удал`, `пуш`, `депло`, `оплат`) |
 | `[triage]` `team`, `teams`, `max_per_handover` | product team that answers questions; `teams` limits whose questions are triaged (default: **every** team, the product team included); escalate after N triages per handover |
-| `[loop]` | `poll_seconds` 120, `session_idle_minutes` 20 (no stream event for that long ends the session), `session_max_minutes` 180 (maximum duration; the old `session_timeout_minutes` is accepted as this; both count awake time only; for a work session a checkpoint, see **Limit check**), `limit_check_minutes` 60 (positive: extension when the limit check finds the session progressing), `limit_checks` 3 (integer ≥ 0: limit checks per session, so a healthy work session runs up to 180 + 3 × 60 = 360 min; 0 turns them off), `wrap_up_minutes` 15 (≥ 0: grace period of the wrap-up at a work session's last time limit, see **Wrap-up**; 0 turns the wrap-up off and such a session is cut at its deadline), `wake_grace_minutes` 3 (positive: after the computer wakes, a session with no stream line for that long is ended as `interrupted` and resumed), `no_progress_limit` 2, `usage_pause_percent` 90 (integer 1–100: no new step while a usage window not yet reset is used at least this much; 100 turns the prediction off; `run --budget-5h` / `--budget-7d` replace it per window for one run), `usage_backoff_minutes` 30 (doubling up to `usage_backoff_max_minutes` 300; only when a usage-limit hit has no known reset time), `idle_ask` false, `idle_reask_minutes` 60 (integer ≥ 0: awake minutes since the last session after which an idle ask that returned `handed_over` or `none` is repeated without hub activity; sleeps do not count; 0 asks again only on hub activity; see **Idle ask**), `keep_awake` `"on"` (`"off"`, `"on"` or a daily range `"HH:MM-HH:MM"`: when a run keeps the computer from sleeping on its own; `"off"` lets the computer sleep; not a moment, which applies to one run only; `--keep-awake` replaces it for one run, see **Keep awake**) |
+| `[loop]` | `poll_seconds` 120, `session_idle_minutes` 20 (no stream event for that long ends the session), `session_max_minutes` 180 (maximum duration; the old `session_timeout_minutes` is accepted as this; both count awake time only; for a work session a checkpoint, see **Limit check**), `limit_check_minutes` 60 (positive: extension when the limit check finds the session progressing), `limit_checks` 3 (integer ≥ 0: limit checks per session, so a healthy work session runs up to 180 + 3 × 60 = 360 min; 0 turns them off), `wrap_up_minutes` 15 (≥ 0: grace period of the wrap-up at a work session's last time limit, see **Wrap-up**; 0 turns the wrap-up off and such a session is cut at its deadline), `wake_grace_minutes` 3 (positive: after the computer wakes, a session with no stream line for that long is ended as `interrupted` and resumed), `no_progress_limit` 2, `usage_pause_percent` 90 (integer 1–100: no new step while a usage window not yet reset is used at least this much; 100 turns the prediction off; `run --budget-5h` / `--budget-7d` replace it per window for one run), `usage_backoff_minutes` 30 (doubling up to `usage_backoff_max_minutes` 300; only when a usage-limit hit has no known reset time), `idle_ask` false, `idle_reask_minutes` 60 (integer ≥ 0: awake minutes since the last session after which an idle ask that returned `handed_over` or `none` is repeated without hub activity; sleeps do not count; 0 asks again only on hub activity; see **Idle ask**), `keep_awake` `"on"` (`"off"`, `"on"` or a daily range `"HH:MM-HH:MM"`: when a run keeps the computer from sleeping on its own; `"off"` lets the computer sleep; not a moment, which applies to one run only; `--keep-awake` replaces it for one run, see **Keep awake**), `parallel_sessions` 1 (integer ≥ 1: sessions at once, at most one per repository and handover; above 1 needs an `ho` with the hub lock; see **Parallel sessions**) |
 | `[goal]` `max_sessions`, `max_hours` | limits of a goal run: 40 sessions (every session counts: work, triage consultation, goal check), 12 hours (usage-limit waits count, sleeps of the computer do not); both positive; `--max-sessions` / `--max-hours` override them |
 
 A broken config (missing value, missing repository path, `ho` / `claude` not found) exits with code 2 and names the problem.
@@ -52,6 +52,51 @@ Otherwise the dispatcher prints one line on stderr and exits with code **2**:
 
 radark-factory and radark-handover are upgraded together: a release of one that changes the contract needs the
 matching release of the other.
+
+With `parallel_sessions` above 1, `run`, `once` and `dry-run` also need the **hub lock**: the answer must list
+`"hub-lock"` in `features` (`{"schema_version": 1, "version": "0.2.0", "contract": 1, "features": ["hub-lock"]}`),
+meaning that `ho` serialises its hub writes and `sync` with an OS lock on `<hub>/.ho.lock`. Otherwise the dispatcher
+exits with code 2 before the run lock and any session: `ho incompatible: ho 0.2.0 (contract 1) does not report the
+hub lock (...); parallel_sessions = 2 needs it, ... Install a radark-handover release with the hub lock, or set
+[loop] parallel_sessions = 1.` `plan` and `parallel_sessions = 1` do not need it.
+
+### Parallel sessions
+
+`[loop] parallel_sessions` (default 1) is how many sessions run at once. With 1 the dispatcher runs one session at a
+time, as before. With more, while a place is free, it starts the next owner-answer resume or candidate (same order as
+**Selection**) whose **repository and handover have no running session**; two teams that share one repository count
+as one. Items held while they wait for another team's result stay held, so dependent work never runs in parallel.
+A limit check and a triage consultation run next to the session they serve and do not take a place.
+
+- **Workers:** each session runs in its own worker thread to its end (limit check, wrap-up, triage, escalation,
+  review hand-off, after-session update); state, run log, console and goal record are written under one lock, whole
+  lines only. One runner per team.
+- **Run control:** `PAUSE`, `STOP`, `--until`, the usage budget, the usage hold, a usage-limit back-off, the goal
+  run's limits and Ctrl+C stop **new** starts; the running sessions finish and are processed, and the run ends after
+  the last one (`No new session (<why>); waiting for N running sessions.`). A usage-limit hit of one session sets the
+  back-off for new starts; the other session goes on. Ctrl+C twice ends every running session (`interrupted`, cause
+  owner). `once` runs one session.
+- **Whole-hub steps:** the idle ask and the goal check may run next to running work when a place is free, nothing
+  else can use it and the product team's repository is free, each when it is due by its own rule. Their prompt then
+  names the work in progress (`Work in progress right now (other sessions are working on it): <team> <handover>
+  "<title>" (<phase>); ... Hand over or start only work that does not depend on these results and does not touch
+  these handovers or the changes they work on; do not report them as stalled.`). A goal check is not repeated while
+  sessions run and the hub has not changed since; such a check does not count toward the `stalled` rule. A goal
+  verdict `complete` or `blocked` ends the run after the running sessions.
+- **Console:** start lines show `(N running)` when more than one session runs; end lines always name team, phase
+  and handover (or the step).
+- **Isolation:** every process a session starts ends with it, also background processes detached from their parent
+  and after a normal end (a Windows job object with kill-on-close; a process group elsewhere; the process tree only
+  when a job cannot be made, logged once as `job_object_unavailable`). Each session keeps its temp directory
+  `<run_dir>/tmp/<team>/`. Every session gets `HARNESS_PARALLEL_SESSIONS` (the setting, also 1); with more than one,
+  every work prompt adds: *Another team may be working on this computer at the same time. Stop only processes you
+  started yourself, by their ID (never by name or image, never "all node" or "any playwright"); use no fixed shared
+  ports or paths outside your repository and your temp directory; expect runs to be slower than usual.*
+- **State and recovery:** `state.json` keeps one running record per session (`meta.running` keyed by session ID; a
+  single record of an earlier version is read as one); a restart recovers each.
+- **dry-run** adds `In parallel (parallel_sessions = N): <team> <phase> <handover>; ...` or `In parallel: nothing
+  else can start (<why>)`; `plan` stays a sequential prediction.
+- **Back to one session:** set `parallel_sessions = 1` (or remove it).
 
 ## Commands
 

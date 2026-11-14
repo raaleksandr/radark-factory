@@ -5,6 +5,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -145,11 +146,13 @@ class RunLog:
     def __init__(self, path: Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()  # whole JSON lines from parallel sessions (parallel-sessions D1)
 
     def write(self, event: str, **fields) -> dict:
         record = {"time": now_ts(), "event": event, **fields}
-        with open(self.path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        line = json.dumps(record, ensure_ascii=False) + "\n"
+        with self._lock, open(self.path, "a", encoding="utf-8") as fh:
+            fh.write(line)
         return record
 
     def read(self) -> list[dict]:

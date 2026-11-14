@@ -49,7 +49,7 @@ def test_progressing_session_wraps_up_after_its_last_extension(env):
     assert ends == ["interrupted", "finished"] and first["phase"] == "apply"
     text = "\n".join(lines)
     assert f"! app {A}: time limit after " in text and "1 extension used; asking the session to wrap up within" in text
-    assert f"app {sym('·')} apply {sym('→')} interrupted, asked to wrap up (" in text
+    assert f"app {sym('·')} apply {sym('·')} {A} {sym('→')} interrupted, asked to wrap up (" in text
     assert f"app {sym('·')} apply {sym('·')} wrap-up {sym('·')} {A}" in text
     assert "session ended with an error" not in text
     rec = d.state.get(A)

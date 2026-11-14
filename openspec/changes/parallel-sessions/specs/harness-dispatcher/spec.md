@@ -162,7 +162,7 @@ With more than one session allowed, every work prompt (phase prompt, resume afte
 - **THEN** its prompt has no such note
 
 ### Requirement: Hub lock required for parallel sessions
-With `parallel_sessions` above 1, the start check of `ho` (see *Compatibility of ho*) for `run`, `once` and `dry-run` SHALL also require the installed `ho` to report that it serialises hub writes and `sync`. When it does not, the dispatcher MUST stop as *Stopping on an incompatible ho* says, with a message that names the `ho` version and says to install a radark-handover with the hub lock or to set `parallel_sessions = 1`. Otherwise the check is as before.
+With `parallel_sessions` above 1, the start check of `ho` (see *Compatibility of ho*) for `run`, `once` and `dry-run` SHALL also require the installed `ho` to report that it serialises hub writes and `sync` (`"hub-lock"` in the `features` of `ho --version --json`). When it does not, the dispatcher MUST stop as *Stopping on an incompatible ho* says, with a message that names the `ho` version and says to install a radark-handover with the hub lock or to set `parallel_sessions = 1`. Otherwise the check is as before.
 
 #### Scenario: ho without the lock
 - **WHEN** `parallel_sessions` is 2 and `ho --version --json` reports a supported contract but no hub lock

@@ -142,14 +142,7 @@ error, released by the OS on a crash, ignored by git, read commands do not wait.
 its own repository (code, tests, JSON contract), requested with HO-20261114-23cx; radark-handover may choose a better
 variant, and this change adopts its result before it is finished (task 0.1).
 
-**How the engine knows the installed `ho` has the lock:** proposed to radark-handover: an additive field in
-`ho --version --json` (`"hub_lock": true`, or a feature list), contract staying 1 so older engines are not broken.
-The RB-003 start check (`check_ho`) returns it with the version; when `parallel_sessions > 1` and the `ho` does not
-report the lock, `run`, `once` and `dry-run` stop with exit code 2 before any session, with one message naming the
-`ho` version found, that the hub lock is needed for `parallel_sessions > 1`, and the two ways out (install a
-radark-handover with the lock, or set `parallel_sessions = 1`). `plan` (sequential) does not require it. With
-`parallel_sessions = 1` nothing changes. If radark-handover answers with another signal (a contract bump or a version
-minimum), D6 and task 4.1 follow its answer.
+**How the engine knows the installed `ho` has the lock** (radark-handover's answer, change `add-hub-lock`, commits a1934ba and 7b78e74, HO-20261114-23cx): `ho --version --json` has an additive `features` list; an `ho` with the lock lists `"hub-lock"` in it (contract stays 1; an older `ho` has no `features` field). The RB-003 start check (`check_ho`) returns the features with the version; when `parallel_sessions > 1` and `"hub-lock"` is not in them, `run`, `once` and `dry-run` stop with exit code 2 before any session and before the run lock, with one message naming the `ho` version found, that the hub lock is needed for `parallel_sessions > 1`, and the two ways out (install a radark-handover with the lock, or set `parallel_sessions = 1`). `plan` (sequential) does not require it. With `parallel_sessions = 1` nothing changes. The lock itself: `<hub>/.ho.lock`, an OS lock (`msvcrt.locking` / `fcntl.flock`) around `new`, `ack`, `done`, `respond`, `decline`, `comment`, `seen`, `return`, `close` and `sync`; reads do not wait; bounded wait 300 s (`HO_LOCK_TIMEOUT`), then error `hub_locked` with exit code 1; `.ho.lock` is ignored by git. The draft's proposal `"hub_lock": true` was replaced by this signal (task 0.1).
 
 The dispatcher's own hub writes (escalations, team-decision notices, `ho sync`) from several workers are separate
 `ho` processes and need no extra lock in the engine.
@@ -239,7 +232,21 @@ Default `parallel_sessions = 1` keeps today's behaviour (plus processes ending w
 
 - One change, not split: the per-session temp directory already exists, so the isolation part is small (job object,
   prompt note, environment variable); tasks are ordered so isolation lands first and helps with one session.
-- The hub-lock signal shape (`"hub_lock": true` in `ho --version --json`) is our proposal; radark-handover decides.
+- The hub-lock signal is radark-handover's: `"hub-lock"` in the `features` of `ho --version --json` (D6).
 - Stop at start (exit 2) rather than falling back to one session when the `ho` has no lock and N > 1: a silent
   fallback would hide a configuration the owner asked for.
 - `parallel_sessions` counts work sessions and whole-hub steps; limit checks and triage consultations do not count.
+
+## Assumptions (unattended apply session)
+
+- The lock is held while dispatcher code runs and released only around waits (a session, a limit check, a nap,
+  waiting for a worker). Hub calls and git snapshots therefore run under the lock, serialising the dispatcher's own
+  `ho` calls; they are short, and sessions never wait on the lock while they run (only their callbacks do, briefly).
+- With `parallel_sessions = 1` the loop is the earlier one-session loop, unchanged (D1 "N = 1").
+- `once` (`run --once`) runs one session also with `parallel_sessions > 1`, then exits after it is processed.
+- Parallel workers get one runner per team, created once and reused; a team's next worker starts only after its
+  previous one has ended (one session per repository).
+- The goal check next to running work does not count toward `empty_continues` when it brought no new hub activity
+  (D3: waiting is no stall); without running work it counts as before.
+- `session-settings.json` and `hook-config.json` are rewritten only when their content changes, so a runner created
+  for a second worker never replaces a file a running session may be reading.

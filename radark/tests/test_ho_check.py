@@ -30,7 +30,7 @@ def missing_ho(env):
 def test_compatible_ho(env, monkeypatch):
     cfg = env.cfg()
     monkeypatch.setenv("HO_TEAM", "app")
-    assert check_ho(cfg.ho, cfg.hub) == HoVersion("0.2.0", 1)
+    assert check_ho(cfg.ho, cfg.hub) == HoVersion("0.2.0", 1, ("hub-lock",))
     call, = env.ho_calls()
     assert call == {"args": ["--version"], "team": None, "hub": str(cfg.hub)}
 
@@ -73,7 +73,7 @@ def test_several_supported_contracts(env):
     cfg = env.cfg()
     env.set_hub({"_version": WRONG})
     assert contracts_text((1, 2)) == "1 or 2"
-    assert check_ho(cfg.ho, cfg.hub, supported=(1, 2)) == HoVersion("0.9.0", 2)
+    assert check_ho(cfg.ho, cfg.hub, supported=(1, 2)) == HoVersion("0.9.0", 2)  # no `features`: no hub lock
     env.set_hub({"_version": {"version": "1.0.0", "contract": 3}})
     assert "needs contract 1 or 2" in check_ho(cfg.ho, cfg.hub, supported=(1, 2))
 
@@ -145,3 +145,52 @@ def test_local_commands_skip_the_check(env, capsys, argv):
     with_version(env, WRONG)
     assert main(["--config", str(env.config_path)] + argv) in (0, 1)
     assert env.ho_calls() == []
+
+
+# ---- hub lock for parallel sessions (parallel-sessions task 4.1)
+
+NO_LOCK = {"schema_version": 1, "version": "0.2.0", "contract": 1}
+LOCK = {**NO_LOCK, "features": ["hub-lock"]}
+
+
+def sessions(env, n):
+    env.config_path.write_text(env.config_path.read_text() + f"parallel_sessions = {n}\n")
+
+
+def test_hub_lock_signal(env):
+    cfg = env.cfg()
+    env.set_hub({"_version": LOCK})
+    assert check_ho(cfg.ho, cfg.hub).hub_lock
+    env.set_hub({"_version": NO_LOCK})
+    assert not check_ho(cfg.ho, cfg.hub).hub_lock
+    env.set_hub({"_version": {**NO_LOCK, "features": "hub-lock"}})  # not a list: ignored
+    assert not check_ho(cfg.ho, cfg.hub).hub_lock
+
+
+@pytest.mark.parametrize("argv", [["dry-run"], ["once"], ["run"]])
+def test_two_sessions_without_the_hub_lock_stop(env, capsys, argv):
+    sessions(env, 2)
+    with_version(env, NO_LOCK)
+    err = stopped(env, capsys, argv)
+    assert "ho 0.2.0 (contract 1) does not report the hub lock" in err
+    assert "parallel_sessions = 2" in err and "radark-handover" in err and "parallel_sessions = 1" in err
+
+
+def test_two_sessions_with_the_hub_lock_start(env, capsys):
+    sessions(env, 2)
+    with_version(env, LOCK)
+    assert main(["--config", str(env.config_path), "dry-run"]) == 0
+    assert "Would start: app" in capsys.readouterr().out
+
+
+def test_one_session_needs_no_lock(env, capsys):
+    with_version(env, NO_LOCK)
+    assert main(["--config", str(env.config_path), "dry-run"]) == 0
+    assert "Would start: app" in capsys.readouterr().out
+
+
+def test_plan_needs_no_lock(env, capsys):
+    sessions(env, 2)
+    with_version(env, NO_LOCK)
+    assert main(["--config", str(env.config_path), "plan"]) == 0
+    assert "Plan (if every step succeeds):" in capsys.readouterr().out

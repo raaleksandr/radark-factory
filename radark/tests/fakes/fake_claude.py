@@ -8,8 +8,11 @@ Scenario: {"steps": [{"hook": "SessionStart"} | {"hook": "PreToolUse", "input": 
                      | {"active": s, "every": i} (an assistant event every i seconds for s seconds)
                      | {"heartbeats": s, "every": i} (a tool_progress heartbeat every i seconds: a hung tool call)
                      | {"cmd": [argv...]} (run in the repository) | {"write": [relative path, text]}
-                     | {"ho": [args...]} (the fake `ho` as this session's team, e.g. a `new` handover)],
+                     | {"ho": [args...]} (the fake `ho` as this session's team, e.g. a `new` handover)
+                     | {"touch": path} | {"wait_for": path, "within": s} (order two parallel sessions)
+                     | {"detach": pid file} (start a background process whose parent exits at once)],
            "result": {...} | null, "exit": 0}
+FAKE_CLAUDE_SCENARIOS may also hold {team: [scenarios]}: each team (HARNESS_TEAM) plays its own list.
 A Stop hook that blocks is recorded in the stream as {"type": "fake_hook", ...}.
 Each call (argv, cwd, selected env) is appended to FAKE_CLAUDE_SCENARIOS + ".calls"."""
 import json
@@ -28,11 +31,14 @@ with open(base + ".calls", "a", encoding="utf-8") as fh:
                          "env": {k: os.environ.get(k) for k in ("ANTHROPIC_API_KEY", "HARNESS_TEAM", "HARNESS_HANDOVER",
                                                                 "HARNESS_SESSION", "HARNESS_RUN_ID", "HO_TEAM", "TEMP", "TMP",
                                                                 "TMPDIR", "HARNESS_TEMP", "HARNESS_SYSTEM_TEMP",
-                                                                "HARNESS_REPO")}}) + "\n")
+                                                                "HARNESS_REPO", "HARNESS_PARALLEL_SESSIONS")}}) + "\n")
+scenarios = json.load(open(base, encoding="utf-8"))
 counter = base + ".n"
+if isinstance(scenarios, dict):  # {team: [scenarios]}: each team plays its own list (parallel sessions)
+    counter += "." + os.environ.get("HARNESS_TEAM", "")
+    scenarios = scenarios.get(os.environ.get("HARNESS_TEAM", ""), [{}])
 n = int(open(counter).read()) if os.path.exists(counter) else 0
 open(counter, "w").write(str(n + 1))
-scenarios = json.load(open(base, encoding="utf-8"))
 scenario = scenarios[min(n, len(scenarios) - 1)]
 settings = json.load(open(argv[argv.index("--settings") + 1], encoding="utf-8"))
 session = argv[argv.index("--session-id") + 1] if "--session-id" in argv else argv[argv.index("--resume") + 1]
@@ -74,6 +80,17 @@ for step in scenario.get("steps", []):
         out({"type": "assistant", "message": {"content": [{"type": "text", "text": step["text"]}]}})
     elif "sleep" in step:
         time.sleep(step["sleep"])
+    elif "touch" in step:
+        open(step["touch"], "w").close()
+    elif "wait_for" in step:  # until the file exists (another session's `touch`), at most 30 s
+        end = time.monotonic() + step.get("within", 30)
+        while not os.path.exists(step["wait_for"]) and time.monotonic() < end:
+            time.sleep(0.05)
+    elif "detach" in step:  # a background process whose parent exits at once; its PID goes to the file
+        code = (f"import subprocess, sys; p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], "
+                f"stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
+                f"open({step['detach']!r}, 'w').write(str(p.pid))")
+        subprocess.run([sys.executable, "-c", code], capture_output=True, check=True)
     elif "ho" in step:
         subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake_ho.py"),
                         *step["ho"]], capture_output=True, check=True)

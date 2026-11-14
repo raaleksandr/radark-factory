@@ -95,7 +95,7 @@ def test_apply_start_line_names_time_team_phase_id_and_title(env, utf8):
     before = stamp()
     d.loop(once=True)
     assert lines[0] in (f'{t}  app · apply · {A}  "{TITLE}"' for t in (before, stamp()))
-    assert HHMM.match(lines[1]) and lines[1].startswith(lines[1][:5] + "  app · apply → finished (")
+    assert HHMM.match(lines[1]) and lines[1].startswith(lines[1][:5] + f"  app · apply · {A} → finished (")
     assert d.state.get(A)["title"] == TITLE
 
 
@@ -127,7 +127,7 @@ def test_time_limit_error_without_progress(env, utf8):
     env.set_claude([{"steps": [START, {"sleep": 30}], "result": {}}])
     d.loop(once=True)
     problems = [x[9:] for x in lines if x[5:9] == "  ! "]
-    assert "app · apply → error, idle time limit (" in lines[1]
+    assert f"app · apply · {A} → error, idle time limit (" in lines[1]
     assert problems[0].startswith(f"app {A}: session ended with an error: idle time limit after ")
     assert problems[1] == f"app {A}: no progress in this session (1 of 2 before the item stalls)"
 

@@ -49,13 +49,29 @@ SUPPORTED_HO_CONTRACTS = (1,)  # JSON contract versions of `ho` this engine read
 VERSION_TIMEOUT_S = 60  # time limit of the start probe `ho --version --json`
 
 
+HUB_LOCK = "hub-lock"  # `features` entry of an ho that serialises hub writes and sync (parallel-sessions D6)
+
+
 @dataclass(frozen=True)
 class HoVersion:
     version: str
     contract: int
+    features: tuple = ()
 
     def line(self) -> str:
         return f"{self.version} (contract {self.contract})"
+
+    @property
+    def hub_lock(self) -> bool:
+        return HUB_LOCK in self.features
+
+
+def hub_lock_message(ho: HoVersion, sessions: int) -> str:
+    """Why an ho without the hub lock cannot run parallel sessions (parallel-sessions D6)."""
+    return (f"ho {ho.line()} does not report the hub lock (no \"{HUB_LOCK}\" in the features of "
+            f"'ho --version --json'); parallel_sessions = {sessions} needs it, so that several sessions and the "
+            "dispatcher can write to the hub at the same time. Install a radark-handover release with the hub lock, "
+            "or set [loop] parallel_sessions = 1.")
 
 
 def contracts_text(supported=SUPPORTED_HO_CONTRACTS) -> str:
@@ -91,7 +107,9 @@ def check_ho(cmd: list[str], hub: Path, timeout: float = VERSION_TIMEOUT_S,
         return (f"ho '{shown}' is version {version} with JSON contract {contract}; this radark-factory needs "
                 f"contract {needed}. Install a radark-handover release with contract {needed}, "
                 f"or a radark-factory release that supports contract {contract}.")
-    return HoVersion(version, contract)
+    features = data.get("features")
+    features = tuple(f for f in features if isinstance(f, str)) if isinstance(features, list) else ()
+    return HoVersion(version, contract, features)
 
 
 _BY_EXIT = {1: HoUsageError, 2: HoNotFound, 3: HoLifecycleError, 4: HoIntegrityError}

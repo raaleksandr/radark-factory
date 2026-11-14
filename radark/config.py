@@ -71,6 +71,7 @@ class Config:
     owner_team: str = "owner"
     goal_max_sessions: int = 40  # safety limits of a goal run (goal-run design G1)
     goal_max_hours: float = 12
+    parallel_sessions: int = 1  # sessions at once, one per repository and handover (parallel-sessions D1)
 
     def team(self, team_id: str) -> Team:
         for t in self.teams:
@@ -183,6 +184,7 @@ def load(path: str | Path) -> Config:
         owner_team=str(data.get("owner_team", "owner")),
         goal_max_sessions=int(goal.get("max_sessions", 40)),
         goal_max_hours=float(goal.get("max_hours", 12)),
+        parallel_sessions=loop.get("parallel_sessions", 1),
     )
     if cfg.owner_team in cfg.team_ids():
         raise ConfigError(f"owner_team '{cfg.owner_team}' is the human owner and must not be listed in [[teams]]")
@@ -200,6 +202,9 @@ def load(path: str | Path) -> Config:
         raise ConfigError(f"loop.idle_reask_minutes must be an integer of 0 or more (0: only on hub activity), not {m!r}")
     if cfg.wake_grace_minutes <= 0:
         raise ConfigError("loop.wake_grace_minutes must be positive")
+    ps = cfg.parallel_sessions
+    if isinstance(ps, bool) or not isinstance(ps, int) or ps < 1:
+        raise ConfigError(f"loop.parallel_sessions must be an integer of 1 or more, not {ps!r}")
     if cfg.goal_max_sessions <= 0 or cfg.goal_max_hours <= 0:
         raise ConfigError("goal.max_sessions and goal.max_hours must be positive")
     pct = cfg.usage_pause_percent
@@ -252,5 +257,7 @@ def summary(cfg: Config, version: str, ho: str | None = None) -> str:
     lines.append(f"Claude Code: {version}")
     if ho:
         lines.append(f"ho: {ho}")
+    if cfg.parallel_sessions > 1:
+        lines.append(f"Parallel sessions: up to {cfg.parallel_sessions} (one per repository)")
     lines.append(f"Run directory: {cfg.run_dir}")
     return "\n".join(lines)
