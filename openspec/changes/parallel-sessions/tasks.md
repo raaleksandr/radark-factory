@@ -90,7 +90,7 @@ propose).
 
 ## 7. Hand back
 
-- [ ] 7.1 Commit locally (no push, tag, release or reinstall) with messages citing HO-20261114-wwqw; verify
+- [x] 7.1 Commit locally (no push, tag, release or reinstall) with messages citing HO-20261114-wwqw; verify
   `git status` is clean.
 - [ ] 7.2 `ho done HO-20261114-wwqw -m "..."` listing: the change name (`parallel-sessions`) and radark-handover's
   change name; commits in both repositories (radark-handover's from its `ho done`); test counts of both suites; the
