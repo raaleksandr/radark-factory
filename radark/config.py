@@ -1,4 +1,5 @@
-"""Load and validate harness.toml (spec: Configuration)."""
+"""Load and validate the configuration file: radark.toml, or the legacy harness.toml (spec: Configuration;
+radark-config-names D1-D4)."""
 from __future__ import annotations
 
 import datetime as dt
@@ -20,6 +21,13 @@ DEFAULT_KEYWORDS = ["push", "deploy", "payment", "delete", "secret", "production
                     "пуш", "запуш", "депло", "задепло", "выкат", "развертыв", "развернуть", "оплат", "платеж",
                     "заплат", "удал", "секрет", "парол", "продакш", "боев"]
 KINDS = ("technical", "product")
+CONFIG_NAME, LEGACY_CONFIG_NAME = "radark.toml", "harness.toml"  # radark-config-names D1
+RUN_DIR_NAME, LEGACY_RUN_DIR_NAME = ".radark", ".harness"  # radark-config-names D2
+LEGACY_CONFIG_NOTE = (f"Legacy name: {LEGACY_CONFIG_NAME} was used because there is no {CONFIG_NAME}; "
+                      f"rename it to {CONFIG_NAME} (nothing else changes).")
+LEGACY_RUN_DIR_NOTE = (f"Legacy name: run directory {LEGACY_RUN_DIR_NAME}/ was used because run_dir is not set and "
+                       f"there is no {RUN_DIR_NAME}/; rename it to {RUN_DIR_NAME}/ or set run_dir = "
+                       f'"{LEGACY_RUN_DIR_NAME}".')
 
 
 class ConfigError(Exception):
@@ -77,6 +85,7 @@ class Config:
     workflow_default: str = workflow.DEFAULT_PROFILE  # `[workflow] profile` (workflow-profiles D1)
     workflow_dir: Path | None = None  # `[workflow] dir`, resolved; None when the default directory is absent
     profiles: dict[str, workflow.Profile] = field(default_factory=dict)  # loaded profiles by name
+    notes: tuple[str, ...] = ()  # legacy-name lines for the start lines, dry-run and plan (radark-config-names D3)
 
     def team(self, team_id: str) -> Team:
         for t in self.teams:
@@ -108,26 +117,26 @@ class Config:
         return {t.profile: self.profile_of(t.id) for t in self.teams}
 
 
-def _missing_hint(name: str) -> str:
+def _missing_hint(name: str, config_file: str = "the configuration file") -> str:
     """For a missing `ho`: the contract this engine needs and what to do (ho-contract-check D3)."""
     if name != "ho":
         return ""
     from .hub import contracts_text
     needed = contracts_text()
     return (f". This radark-factory needs an ho with JSON contract {needed}: install radark-handover with that "
-            "contract, or fix 'ho' in harness.toml")
+            f"contract, or fix 'ho' in {config_file}")
 
 
-def _command(value, name: str) -> list[str]:
+def _command(value, name: str, config_file: str = "the configuration file") -> list[str]:
     """A command is a string (looked up on PATH) or a list (used as given)."""
     if isinstance(value, str):
         found = shutil.which(value)
         if not found:
-            raise ConfigError(f"'{value}' ({name}) was not found on PATH{_missing_hint(name)}")
+            raise ConfigError(f"'{value}' ({name}) was not found on PATH{_missing_hint(name, config_file)}")
         return [found]
     if isinstance(value, list) and value and all(isinstance(v, str) for v in value):
         if not (shutil.which(value[0]) or Path(value[0]).is_file()):
-            raise ConfigError(f"'{value[0]}' ({name}) was not found{_missing_hint(name)}")
+            raise ConfigError(f"'{value[0]}' ({name}) was not found{_missing_hint(name, config_file)}")
         return list(value)
     raise ConfigError(f"'{name}' must be a command name or a non-empty list of strings")
 
@@ -146,7 +155,38 @@ def _keep_awake(value) -> KeepAwake:
     return setting
 
 
-def load(path: str | Path) -> Config:
+def resolve_path(arg: str | Path | None, cwd: Path | None = None) -> tuple[Path, str | None]:
+    """The configuration file to read and an optional legacy note (radark-config-names D1). An explicit path is used
+    as given, whatever its name; otherwise radark.toml in `cwd`, else the legacy harness.toml; both: an error."""
+    cwd = Path.cwd() if cwd is None else Path(cwd)
+    if arg is not None:
+        return cwd / arg, None
+    new, old = cwd / CONFIG_NAME, cwd / LEGACY_CONFIG_NAME
+    if new.is_file() and old.is_file():
+        raise ConfigError(f"both {new} and the legacy {old} exist; remove or rename one of them, or pass --config")
+    if new.is_file():
+        return new, None
+    if old.is_file():
+        return old, LEGACY_CONFIG_NOTE
+    raise ConfigError(f"configuration file not found: {new} (no legacy {LEGACY_CONFIG_NAME} either)")
+
+
+def _run_dir(data: dict, base: Path) -> tuple[Path, str | None]:
+    """An explicit `run_dir` as given; else .radark, or the legacy .harness when only it exists; both: an error
+    (radark-config-names D2). A file of either name counts, so the other is never picked silently."""
+    if "run_dir" in data:
+        return (base / data["run_dir"]).resolve(), None
+    new, old = base / RUN_DIR_NAME, base / LEGACY_RUN_DIR_NAME
+    if new.exists() and old.exists():
+        raise ConfigError(f"run_dir is not set and both {new} and the legacy {old} exist; remove or rename one of "
+                          f"them, or set run_dir in the configuration")
+    if not new.exists() and old.exists():
+        return old.resolve(), LEGACY_RUN_DIR_NOTE
+    return new.resolve(), None
+
+
+def load(path: str | Path, legacy_note: str | None = None) -> Config:
+    """`legacy_note`: the configuration-file note from `resolve_path`, kept in `Config.notes` (D3)."""
     path = Path(path).resolve()
     if not path.is_file():
         raise ConfigError(f"configuration file not found: {path}")
@@ -183,12 +223,13 @@ def load(path: str | Path) -> Config:
     answers = data.get("answers", {})
     loop = data.get("loop", {})
     goal = data.get("goal", {})
+    run_dir, run_dir_note = _run_dir(data, base)
     cfg = Config(
         path=path,
         hub=hub,
         teams=teams,
-        run_dir=(base / data.get("run_dir", ".harness")).resolve(),
-        ho=_command(data.get("ho", "ho"), "ho"),
+        run_dir=run_dir,
+        ho=_command(data.get("ho", "ho"), "ho", path.name),
         claude=_command(data.get("claude", "claude"), "claude"),
         permission_mode=launch.get("permission_mode", "auto"),
         extra_args=list(launch.get("extra_args", [])),
@@ -213,6 +254,7 @@ def load(path: str | Path) -> Config:
         goal_max_sessions=int(goal.get("max_sessions", 40)),
         goal_max_hours=float(goal.get("max_hours", 12)),
         parallel_sessions=loop.get("parallel_sessions", 1),
+        notes=tuple(n for n in (legacy_note, run_dir_note) if n),
     )
     _workflow(cfg, data.get("workflow", {}), base)
     if cfg.owner_team in cfg.team_ids():
@@ -306,7 +348,7 @@ def claude_version(cfg: Config) -> str:
 
 def summary(cfg: Config, version: str, ho: str | None = None) -> str:
     """`ho`: the `ho` version line text, e.g. `0.2.0 (contract 1)` (ho-contract-check D4)."""
-    lines = [f"Hub: {cfg.hub}", "Teams (in priority order):"]
+    lines = [*cfg.notes, f"Hub: {cfg.hub}", "Teams (in priority order):"]
     for t in cfg.teams:
         lines.append(f"  {t.id:<22} {t.kind:<9} {t.profile:<9} {t.repo}")
     if cfg.triage:

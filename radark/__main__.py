@@ -1,5 +1,8 @@
-"""CLI and loop: python -m radark [--config harness.toml]
-run|once|dry-run|plan|status|test-slot|escalations|clear|keep|note."""
+"""CLI and loop: python -m radark [--config FILE]
+run|once|dry-run|plan|status|test-slot|escalations|clear|keep|note.
+
+Without --config the configuration file is radark.toml in the current directory, or the legacy harness.toml
+(radark-config-names D1)."""
 from __future__ import annotations
 
 import argparse
@@ -2638,7 +2641,7 @@ def machine_dry_run(d: Dispatcher) -> list[str]:
     return lines
 
 
-def status(config_path: str) -> int:
+def status(config_arg: str | None) -> int:
     """`status`: read-only view of the machine layer (design D9); takes no lock of its own."""
     directory = machine_mod.machine_dir()
     print(f"Machine directory: {directory}")
@@ -2649,8 +2652,11 @@ def status(config_path: str) -> int:
     except machine_mod.MachineError as exc:
         error, limits = exc, machine_mod.Limits()
         print(f"Limits: error: {exc}")
-    try:
-        cfg = config_mod.load(config_path)
+    config_path = config_arg or "(default)"
+    try:  # the same resolution as the other commands; an error is only reported here (radark-config-names D1)
+        path, note = config_mod.resolve_path(config_arg)
+        config_path = str(path) if config_arg is None else config_arg
+        cfg = config_mod.load(path, note)
     except config_mod.ConfigError as exc:
         cfg = None
         print(f"Configuration {config_path} not read ({exc}); repository conflicts are not checked.")
@@ -2887,7 +2893,9 @@ def main(argv=None) -> int:
         except KeyboardInterrupt:
             return 130
     p = argparse.ArgumentParser(prog="python -m radark", description=__doc__)
-    p.add_argument("--config", default="harness.toml")
+    p.add_argument("--config", default=None, metavar="FILE",
+                   help="configuration file (default: radark.toml, or the legacy harness.toml, in the current "
+                        "directory)")
     sub = p.add_subparsers(dest="command", required=True)
     r = sub.add_parser("run", help="run the loop")
     r.add_argument("--once", action="store_true", help="run one session, then exit")
@@ -2960,8 +2968,9 @@ def main(argv=None) -> int:
             print(f"--keep-awake must be {KEEP_AWAKE_FORMS}, not '{args.keep_awake}'.", file=sys.stderr)
             return 2
 
-    try:
-        cfg = config_mod.load(args.config)
+    try:  # before the `ho` check, any hub command and any session (radark-config-names D1)
+        path, note = config_mod.resolve_path(args.config)
+        cfg = config_mod.load(path, note)
     except config_mod.ConfigError as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 2
@@ -3016,7 +3025,7 @@ def main(argv=None) -> int:
         print(f"{args.id}: {'fresh session per phase' if args.off else 'next phases resume the previous session'}.")
         return 0
 
-    ho = check_ho(cfg.ho, cfg.hub)  # before any other hub call (ho-contract-check D4)
+    ho = check_ho(cfg.ho, cfg.hub, config_file=cfg.path.name)  # before any other hub call (ho-contract-check D4)
     if isinstance(ho, str):
         print(f"ho incompatible: {ho}", file=sys.stderr)
         return 2
@@ -3030,6 +3039,8 @@ def main(argv=None) -> int:
         if args.max_sessions is not None and not goal:
             print("--max-sessions needs --goal: only a goal run has a session limit.", file=sys.stderr)
             return 2
+        for line in cfg.notes:  # legacy names (radark-config-names D3)
+            print(line)
         try:
             config_mod.check_owner(cfg, d.hub.teams())
             return plan_run(d, args.steps, goal, args.max_sessions)

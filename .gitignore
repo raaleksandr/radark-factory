@@ -1,4 +1,7 @@
 # Local pipeline config and run directory (keep real instances outside this repo)
+radark.toml
+.radark/
+# legacy names (radark-config-names)
 harness.toml
 .harness/
 __pycache__/

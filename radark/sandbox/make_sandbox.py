@@ -6,7 +6,7 @@ Creates <dir>/hub (a hub made with `ho init`, same team ids as the real hub), th
 <dir>/repos/app (technical, workflow profile `openspec`), <dir>/repos/backend (technical, workflow profile `plain`,
 no OpenSpec) and <dir>/repos/product (product, with a tiny backlog), each with a minimal CLAUDE.md and
 .claude/settings.json pointing at the sandbox hub (OpenSpec, `openspec init --tools claude`, except `backend`), and
-<dir>/harness.toml for the dispatcher. Never touches the real hub or teams."""
+<dir>/radark.toml for the dispatcher (no run_dir: the run directory is the default <dir>/.radark). Never touches the real hub or teams."""
 from __future__ import annotations
 
 import argparse
@@ -153,7 +153,6 @@ def main(argv=None) -> int:
     package_dir = Path(__file__).resolve().parents[1]
     config = f"""# Sandbox configuration written by {Path(__file__).name}
 hub = {toml_str(hub)}
-run_dir = "run"
 ho = "ho"
 claude = "claude"
 
@@ -185,7 +184,7 @@ poll_seconds = 30
 session_idle_minutes = 20
 session_max_minutes = 30
 """
-    (root / "harness.toml").write_text(config, encoding="utf-8")
+    (root / "radark.toml").write_text(config, encoding="utf-8")
     machine = root / "machine"  # a sandbox-local machine directory: never the real one (machine-wide-instances D1)
     machine.mkdir(exist_ok=True)
     (root / "machine-env.ps1").write_text(f"$env:RADARK_MACHINE_DIR = '{machine}'\n", encoding="utf-8")
@@ -193,7 +192,7 @@ session_max_minutes = 30
     print(f"Sandbox ready in {root}\n  hub: {hub}\n  repos: {tech}, {plain} (plain), {prod}\n"
           f"  machine directory: {machine}\n"
           f"    set it first: . {root / 'machine-env.ps1'}  (PowerShell)  or  . {root / 'machine-env.sh'}  (sh)\n"
-          f"  run: python -m radark --config {root / 'harness.toml'} dry-run   (from {package_dir.parent})")
+          f"  run: python -m radark --config {root / 'radark.toml'} dry-run   (from {package_dir.parent})")
     return 0
 
 

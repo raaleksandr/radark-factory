@@ -9,7 +9,7 @@ driven by a handover hub (the `ho` CLI from radark-handover). Start with [README
 - Tests: `python -m pytest radark/tests` (about 5 minutes; all must pass). They use fake `ho` and `claude`
   (`radark/tests/fakes/`), never a real hub or a real Claude Code session.
 - Sandbox for a manual end-to-end check: `python radark/sandbox/make_sandbox.py <dir>` (a real hub and two
-  tiny team repositories), then `python -m radark --config <dir>/harness.toml dry-run`.
+  tiny team repositories), then `python -m radark --config <dir>/radark.toml dry-run`.
 
 ## Rules
 

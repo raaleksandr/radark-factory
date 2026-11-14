@@ -34,7 +34,7 @@ def write_config(root: Path, extra: str = "", triage: bool = True, teams=TEAMS) 
     if triage:
         lines += ["[triage]", 'team = "product"', 'teams = ["app", "backend"]', "max_per_handover = 3"]
     lines += ["[loop]", "poll_seconds = 0", "no_progress_limit = 2"]
-    path = root / "harness.toml"
+    path = root / "radark.toml"
     path.write_text("\n".join(lines) + "\n" + extra, encoding="utf-8")
     return path
 

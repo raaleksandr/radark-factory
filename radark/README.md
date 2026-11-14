@@ -10,15 +10,20 @@ Runtime: Python 3.12, standard library only. Tests: `pytest`. Tested with Claude
 
 1. `ho` and `claude` on `PATH` (or give full commands in the config). The owner's own Claude Code login is used;
    the dispatcher removes `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` from the agents' environment and never uses `--bare`.
-2. `copy harness.toml.example harness.toml` (git-ignored) and adjust paths.
+2. `copy radark.toml.example radark.toml` (git-ignored) and adjust paths.
 3. `python -m radark dry-run` — prints the hub, teams, Claude Code and `ho` versions, the candidates and the session it would start.
 
-## Configuration (`harness.toml`)
+## Configuration (`radark.toml`)
+
+Without `--config` the dispatcher reads `radark.toml` in the current directory, or the legacy `harness.toml` there
+when there is no `radark.toml`. If both exist it stops with exit 2 (`Configuration error: both ... and the legacy ...
+exist`) before any `ho` call or session; remove or rename one, or pass `--config`. `--config <file>` is used as
+given, whatever its name. Configuration keys are the same for both names.
 
 | Key | Meaning |
 |---|---|
 | `hub` | hub directory (must contain `hub.json`) |
-| `run_dir` | run-time directory, default `.harness` (relative to the config file) |
+| `run_dir` | run-time directory (relative to the config file), used as given when set. Default `.radark`; if `.radark` does not exist but the legacy `.harness` does, `.harness`; if both exist: exit 2, remove or rename one or set `run_dir` |
 | `ho`, `claude` | command name on `PATH`, or a list such as `["python", "D:\\...\\ho.py"]` |
 | `owner_team` | hub team of the human owner, default `owner`; escalation handovers go there. It must be a hub team (`ho teams`) and must not be in `[[teams]]`; `run` / `dry-run` refuse to start otherwise |
 | `[[teams]]` `id`, `repo`, `kind`, `profile` | in priority order; `kind = "technical"` (the work phases of its profile: propose / apply / archive for `openspec`, apply only for `plain`) or `"product"` (act on handovers); `profile`: the team's workflow profile, default `[workflow] profile` (see **Workflow profiles**) |
@@ -46,7 +51,7 @@ Otherwise the dispatcher prints one line on stderr and exits with code **2**:
 
 | Case | Message (abridged) | What to do |
 |---|---|---|
-| `ho` not found | `Configuration error: '<cmd>' (ho) was not found. This radark-factory needs an ho with JSON contract 1: ...` (`ho incompatible: ho not found: cannot start ...` when the file exists but cannot be started) | install radark-handover, or fix `ho` in `harness.toml` |
+| `ho` not found | `Configuration error: '<cmd>' (ho) was not found. This radark-factory needs an ho with JSON contract 1: ...` (`ho incompatible: ho not found: cannot start ...` when the file exists but cannot be started) | install radark-handover, or fix `ho` in the configuration file (the message names it) |
 | too old | `ho incompatible: ho '<cmd>' has no --version (exit 1): it is older than this radark-factory supports. Found: no version; needed: JSON contract 1. ...` | install a radark-handover release that has `ho --version` |
 | no answer | `ho incompatible: ho '<cmd>' did not answer '--version --json' within 60 s. ...` | check the `ho` installation |
 | other contract | `ho incompatible: ho '<cmd>' is version 0.9.0 with JSON contract 2; this radark-factory needs contract 1. Install a radark-handover release with contract 1, or a radark-factory release that supports contract 2.` | install matching releases |
@@ -101,7 +106,7 @@ A limit check and a triage consultation run next to the session they serve and d
 
 ### Several pipelines on one computer
 
-Several pipelines (each its own `harness.toml` and run directory, possibly different hubs and `ho` installs; here
+Several pipelines (each its own configuration file and run directory, possibly different hubs and `ho` installs; here
 `pipeline-a` and `pipeline-b`) may run at once on one computer under one OS user. They share one Claude account,
 so the dispatcher coordinates them through a **machine directory**: `RADARK_MACHINE_DIR` when set, otherwise
 `%LOCALAPPDATA%\radark\machine` on Windows and `${XDG_STATE_HOME:-~/.local/state}/radark/machine` elsewhere
@@ -152,7 +157,7 @@ network or synced folder may not work).
 - **Visibility:** `run` / `once` print `Machine: <dir> - limits 2 sessions, 1 test run` and `Other pipeline running:
   <config path> (1 session running)` per other pipeline; `dry-run` prints the same, any repository conflict and
   `Machine slot: free` or `Machine slot: none free (2 running in other pipelines) - would wait`. `python -m radark
-  [--config harness.toml] status` (read-only, not blocked by a running pipeline, `--config` only for the conflict
+  [--config FILE] status` (read-only, not blocked by a running pipeline, `--config` only for the conflict
   part) prints the machine directory, the limits (exit 2 for an invalid `machine.toml`), the running pipelines
   (configuration path, PID, start, sessions running), the slots in use, the shared usage and hold, and this
   configuration's repository conflicts. Of another pipeline only its configuration path, PID, start time and session
@@ -166,7 +171,7 @@ checks the dispatcher makes after a session.
 ```toml
 [workflow]
 profile = "openspec"   # default for every team; built-in: openspec, plain
-dir = "workflows"      # profile directory, relative to harness.toml (default "workflows"; may be absent)
+dir = "workflows"      # profile directory, relative to the configuration file (default "workflows"; may be absent)
 
 [[teams]]
 id = "backend"
@@ -264,7 +269,7 @@ is dropped. Every variable is a string, empty when it does not apply:
 ## Commands
 
 ```
-python -m radark [--config harness.toml] run            # loop until STOP / Ctrl+C
+python -m radark [--config FILE] run                   # loop until STOP / Ctrl+C
 python -m radark run --goal goal.md [--max-sessions N] [--max-hours H] [--no-wait]   # goal run: work the goal to an end, report
 python -m radark note "<text>"                          # append a timestamped note to the goal run's file (no lock)
 python -m radark run --once   |  once                   # one work item (session + any triage), then exit
@@ -370,7 +375,7 @@ When a Claude Code session starts the dispatcher for you, its console is hidden.
 the session keeps watching and steering the run, start the dispatcher in a window of its own:
 
 ```
-Start-Process powershell -ArgumentList '-NoExit', '-Command', 'cd D:\work\my-factory; $env:PYTHONIOENCODING = \"utf-8\"; python -m radark run --goal .harness\goal.md --max-sessions 3'
+Start-Process powershell -ArgumentList '-NoExit', '-Command', 'cd D:\work\my-factory; $env:PYTHONIOENCODING = \"utf-8\"; python -m radark run --goal .radark\goal.md --max-sessions 3'
 ```
 
 The window shows the console lines and, at the end, the goal report and "Press any key to exit". Claude Code does
@@ -787,6 +792,24 @@ escalation.
   next ask now`. `dry-run` says when the next idle ask would come (now, `next idle re-ask ~HH:MM if the computer
   stays awake, or on hub activity`, or only on hub activity) and prints the idle prompt with its no-goal notice.
 
+## Migrating from harness.toml / .harness/
+
+Nothing is required: a pipeline with `harness.toml` and `.harness/` keeps working after an upgrade, with the same
+run files and prompts. When a fallback picks an old name, the start lines of `run` / `once` and the output of
+`dry-run` and `plan` carry one line saying so, e.g. `Legacy name: harness.toml was used because there is no
+radark.toml; rename it to radark.toml (nothing else changes).` There is no such line when the old name is given
+explicitly (`--config harness.toml`, `run_dir = ".harness"`). The dispatcher never moves, renames or deletes either.
+
+To adopt the new names:
+
+1. Stop the pipeline (`<run_dir>/STOP` or Ctrl+C) and wait until it has exited. A pipeline still running under the
+   old file name counts as another pipeline for the machine directory, so a new one would wait for its repositories.
+2. Rename `harness.toml` to `radark.toml`.
+3. Rename `.harness/` to `.radark/`, or keep it by setting `run_dir = ".harness"` in `radark.toml`.
+
+Environment variables given to sessions and hooks (`HARNESS_RUN_DIR`, `HARNESS_PARALLEL_SESSIONS`,
+`HARNESS_TEST_SLOT`, ...) keep their names.
+
 ## Run-time files (`run_dir`)
 
 `state.json` (per handover: team, change, phase, sessions (with the progress snapshot `base`: branch heads, change,
@@ -865,7 +888,7 @@ auto-close the escalation handover (checked with ho on 2026-10-19).
 ```
 python -m pytest radark/tests -q                                   # fake ho / claude; the fake claude runs the real hooks
 python radark/sandbox/make_sandbox.py <scratch-dir> [--force]      # throw-away hub + app / product repos
-python -m radark --config <scratch-dir>/harness.toml once
+python -m radark --config <scratch-dir>/radark.toml once
 ```
 
 ## Verification results (2026-10-17, Claude Code 2.1.302, Python 3.12.10, Windows 11)

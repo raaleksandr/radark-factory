@@ -79,7 +79,7 @@ def contracts_text(supported=SUPPORTED_HO_CONTRACTS) -> str:
 
 
 def check_ho(cmd: list[str], hub: Path, timeout: float = VERSION_TIMEOUT_S,
-             supported=SUPPORTED_HO_CONTRACTS) -> HoVersion | str:
+             supported=SUPPORTED_HO_CONTRACTS, config_file: str = "the configuration file") -> HoVersion | str:
     """Probe `ho --version --json` once at start (ho-contract-check D1-D3). Returns the found version, or the one
     message that stops the dispatcher: missing, no answer, too old (no usable --version) or unsupported contract."""
     shown, needed = " ".join(cmd), contracts_text(supported)
@@ -93,7 +93,7 @@ def check_ho(cmd: list[str], hub: Path, timeout: float = VERSION_TIMEOUT_S,
                 f"This radark-factory needs an ho with JSON contract {needed}.")
     except OSError as exc:
         return (f"ho not found: cannot start '{shown}' ({exc}). This radark-factory needs an ho with JSON contract "
-                f"{needed}: install radark-handover with that contract, or fix 'ho' in harness.toml.")
+                f"{needed}: install radark-handover with that contract, or fix 'ho' in {config_file}.")
     data = _json(proc.stdout.decode("utf-8", errors="replace"))
     version = data.get("version") if isinstance(data, dict) else None
     contract = data.get("contract", data.get("schema_version")) if isinstance(data, dict) else None

@@ -66,10 +66,15 @@ profile in the team's `CLAUDE.md`, so a session started by hand works the same w
 
 ```
 uv tool install git+https://github.com/<owner>/radark-factory     # or: pip install .
-copy harness.toml.example D:\work\my-factory\harness.toml           # edit hub, teams, paths
-radark --config D:\work\my-factory\harness.toml dry-run
-radark --config D:\work\my-factory\harness.toml run
+copy radark.toml.example D:\work\my-factory\radark.toml             # edit hub, teams, paths
+cd D:\work\my-factory
+radark dry-run                                                       # reads radark.toml here; run files in .radark\
+radark run
 ```
+
+Pipelines set up before this name change keep working unchanged: without `radark.toml` the dispatcher reads the
+legacy `harness.toml` and, without `run_dir`, uses an existing `.harness\` (see "Migrating from harness.toml /
+.harness/" in [radark/README.md](radark/README.md)).
 
 `radark` and `python -m radark` are the same command. `python -m harness` is a deprecated alias of `python -m radark`
 (same output and exit code, plus one note on standard error), kept for at least one release.

@@ -1,7 +1,8 @@
-# Copy to harness.toml and adjust. Relative paths are resolved from this file's directory.
+# Copy to radark.toml and adjust. Relative paths are resolved from this file's directory.
 
 hub = 'D:\work\hub'
-run_dir = ".harness"          # state.json, runs.jsonl, sessions/, markers/, lock, PAUSE, STOP
+# run_dir = ".radark"          # default; relative to this file. state.json, runs.jsonl, sessions/, markers/,
+                              # lock, PAUSE, STOP. Without it a legacy .harness/ is used if only it exists
 ho = "ho"                     # command name on PATH, or a list such as ["python", 'D:\...\ho.py']
 claude = "claude"
 owner_team = "owner"          # hub team of the human owner: escalation handovers go there (must be in hub.json)

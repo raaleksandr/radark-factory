@@ -40,7 +40,7 @@ def test_missing_ho(env):
     cmd = [str(env.root / "no-such-ho.exe")]
     message = check_ho(cmd, cfg.hub)
     assert isinstance(message, str) and message.startswith("ho not found: cannot start")
-    assert cmd[0] in message and "JSON contract 1" in message and "harness.toml" in message
+    assert cmd[0] in message and "JSON contract 1" in message and "the configuration file" in message
 
 
 @pytest.mark.parametrize("answer,how", [({"exit": 2}, "exit 2"), ("ho 0.1.0", "no version in its answer"),
@@ -126,6 +126,8 @@ def test_incompatible_ho_stops_before_anything(env, capsys, argv, case):
     expected = {"missing": "no-such-ho.exe' (ho) was not found. This radark-factory needs an ho with JSON contract 1", "old": "has no --version (exit 1)",
                 "wrong": "is version 0.9.0 with JSON contract 2"}[case]
     assert expected in err and "contract 1" in err
+    if case == "missing":  # names the configuration file actually read (radark-config-names D4)
+        assert "fix 'ho' in radark.toml" in err
 
 
 def test_plan_checks_too(env, capsys):
