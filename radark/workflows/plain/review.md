@@ -1,0 +1,1 @@
+${hub_sync}Your team sent $handover and every recipient has finished. Read it and the results with `ho show $handover --json` and check the result. If it is accepted, close it with `ho close $handover`; otherwise return it with `ho return $handover --to <team> -m "<what to change>"`. $review_local_todo

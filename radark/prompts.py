@@ -6,8 +6,12 @@ import json
 import math
 import re
 
+from . import workflow
 from .select import Candidate
+from .workflow import CHANGE_LINE_RE, Profile
 
+# whole-hub steps (idle ask, goal check, consult, limit check) keep this constant; item sessions use the standing
+# rule of their team's profile (workflow-profiles D8), which is this text for `openspec`
 STANDING_RULE = (
     "You are run unattended by a dispatcher; no user is available. Never ask the user: when you "
     "would ask, choose the best variant yourself, record the assumption in the change (design or "
@@ -42,7 +46,6 @@ def denial_rule(temp_dir: str) -> str:
     )
 
 
-CHANGE_LINE_RE =re.compile(r"^\s*CHANGE:\s*`?([A-Za-z0-9._-]+)`?\s*$", re.M)
 BLOCKED_LINE_RE = re.compile(r"^[ \t]*BLOCKED:[ \t]*owner[ \t]*[—–-][ \t]*(.+?)[ \t]*$", re.M | re.I)
 
 TEAM_DECIDES = (
@@ -88,22 +91,38 @@ REVIEW_LOCAL_TODO = (
 )
 
 
-def _change_ref(c: Candidate) -> str:
-    if c.change:
-        return f"the OpenSpec change `{c.change}`"
-    return f"the OpenSpec change in `openspec/changes/` that cites {c.handover} (find it first)"
+def _profile(profile: Profile | None) -> Profile:
+    return profile or workflow.builtin()
 
 
-def _closing(c: Candidate) -> str:
+def _quoted_comment(comment: str | None) -> str:
+    if comment is None:
+        return ""
+    return "\n".join("> " + line for line in (comment or "(no comment)").splitlines())
+
+
+def template_values(c: Candidate, profile: Profile | None = None) -> dict[str, str]:
+    """The documented template variables for candidate `c` (workflow-profiles D3)."""
+    p = _profile(profile)
+    values = {
+        "handover": c.handover, "title": c.title or "", "phase": c.phase, "team": c.team,
+        "expects": c.expects or "see the handover", "change": c.change or "",
+        "change_ref": p.change_ref(c.change, c.handover), "return_comment": _quoted_comment(c.return_comment),
+        "hub_sync": _HUB, "closing": "", "apply_no_archive": APPLY_NO_ARCHIVE, "apply_local_todo": APPLY_LOCAL_TODO,
+        "blocked_note": BLOCKED_NOTE, "review_local_todo": REVIEW_LOCAL_TODO, "team_decides": TEAM_DECIDES,
+        "noun": p.noun,
+    }
+    values["closing"] = p.closing(c.phase, values)
+    return values
+
+
+def _change_ref(c: Candidate, profile: Profile | None = None) -> str:
+    return _profile(profile).change_ref(c.change, c.handover)
+
+
+def _closing(c: Candidate, profile: Profile | None = None) -> str:
     """How the phase ends; repeated in the message that continues a session cut by a time limit."""
-    return {
-        "propose": "End your final message with one line `CHANGE: <change-name>` naming the change you created.",
-        "apply": f"When the work is finished, report it with `ho done {c.handover} -m \"<summary>\"`.",
-        "review": f"If the result is accepted, close it with `ho close {c.handover}`; otherwise return it with "
-                  f"`ho return {c.handover} --to <team> -m \"<what to change>\"`.",
-        "archive": "Make no hub changes other than `ho sync`.",
-        "act": f"Take the expected action ({c.expects or 'see the handover'}) and end with `ho sync`.",
-    }[c.phase]
+    return template_values(c, profile)["closing"]
 
 
 def goal_block(goal: str) -> str:
@@ -112,10 +131,11 @@ def goal_block(goal: str) -> str:
             + _quote(goal))
 
 
-def _with_rule(text: str, goal: str | None, no_goal: str | None = None) -> str:
-    """`no_goal`: the no-goal block (goal-ends-with-run D1), given in place of the goal block in a run without one."""
+def _with_rule(text: str, goal: str | None, no_goal: str | None = None, rule: str = STANDING_RULE) -> str:
+    """`no_goal`: the no-goal block (goal-ends-with-run D1), given in place of the goal block in a run without one;
+    `rule`: the standing rule (the item's profile's for item sessions, workflow-profiles D8)."""
     block = goal_block(goal) if goal else no_goal
-    return text + "\n\n" + (block + "\n\n" if block else "") + STANDING_RULE
+    return text + "\n\n" + (block + "\n\n" if block else "") + rule
 
 
 # product-team prompts of a run without a goal (goal-ends-with-run D1)
@@ -147,39 +167,21 @@ def ended_goal_notice(path: str, status: str | None, ended: str | None) -> str:
 
 
 def phase_prompt(c: Candidate, goal: str | None = None, denials: list[dict] | None = None,
-                 time_limits: list[dict] | None = None, no_goal: str | None = None) -> str:
+                 time_limits: list[dict] | None = None, no_goal: str | None = None,
+                 profile: Profile | None = None) -> str:
     """`denials`: the worker's permission denials that were not escalated, named in a review prompt
     (escalate-denial D3); `time_limits`: the item's sessions wrapped up or cut by a time limit (wrap-up W6.3);
-    `no_goal`: the no-goal block of a product-team prompt in a run without a goal (goal-ends-with-run D1)."""
+    `no_goal`: the no-goal block of a product-team prompt in a run without a goal (goal-ends-with-run D1);
+    `profile`: the team's workflow profile, `openspec` by default; the body is its template for the phase
+    (workflow-profiles D3), the rest is added here."""
+    p = _profile(profile)
+    if c.phase not in ("propose", "apply", "review", "archive", "act"):
+        raise ValueError(f"unknown phase {c.phase!r}")
+    template = "apply-returned" if c.phase == "apply" and c.return_comment is not None else c.phase
+    values = template_values(c, p)
     head = f"Handover {c.handover} (\"{c.title}\"). Phase: {c.phase}.\n\n"
-    if c.phase == "propose":
-        body = (
-            f"{_HUB}Read the handover with `ho show {c.handover} --json`, acknowledge it with "
-            f"`ho ack {c.handover}`, and create an OpenSpec change for it (the /opsx:propose workflow) "
-            f"that cites {c.handover} in its proposal. Do not implement it in this session. The change's tasks "
-            "must not include archiving the change or syncing its specs: archive is a separate phase that runs "
-            "after the author closes the handover, so `ho done` is the last step of apply.\n" + _closing(c)
-        )
-    elif c.phase == "apply":
-        ref = _change_ref(c)
-        if c.return_comment is not None:
-            body = (
-                f"{_HUB}The author returned {c.handover} to your team with this comment:\n\n"
-                + "\n".join("> " + line for line in (c.return_comment or "(no comment)").splitlines())
-                + f"\n\nContinue {ref} according to the return comment (the /opsx:apply workflow). "
-                "Do not create a new change and do not archive. "
-            )
-        else:
-            body = f"{_HUB}Implement {ref} for {c.handover} (the /opsx:apply workflow). "
-        body += (APPLY_NO_ARCHIVE + " " + _closing(c) + " " + APPLY_LOCAL_TODO + " If you need another team, send your own handover with `ho new` and stop that part. "
-                 + BLOCKED_NOTE)
-    elif c.phase == "review":
-        body = (
-            f"{_HUB}Your team sent {c.handover} and every recipient has finished. Read it and the "
-            f"results with `ho show {c.handover} --json` and check the result. If it is accepted, "
-            f"close it with `ho close {c.handover}`; otherwise return it with "
-            f"`ho return {c.handover} --to <team> -m \"<what to change>\"`. " + REVIEW_LOCAL_TODO
-        )
+    body = p.render(template, values)
+    if c.phase == "review":  # core-owned parts of the review prompt
         if denials:
             body += (
                 "\n\nDuring the worker's sessions these actions were denied by the permission mode and the worker "
@@ -189,20 +191,7 @@ def phase_prompt(c: Candidate, goal: str | None = None, denials: list[dict] | No
             )
         if time_limits:
             body += "\n\n" + time_limit_note(time_limits)
-    elif c.phase == "archive":
-        body = (
-            f"The author has closed handover {c.handover}. Archive {_change_ref(c)} "
-            "(the /opsx:archive workflow). Make no hub changes other than `ho sync`."
-        )
-    elif c.phase == "act":
-        body = (
-            f"{_HUB}Act on the handover per the hub guide (AGENTS.md in the hub): read it with "
-            f"`ho show {c.handover} --json` and take the expected action ({c.expects or 'see the handover'}). "
-            "Routine work needs no OpenSpec change. " + BLOCKED_NOTE
-        )
-    else:
-        raise ValueError(f"unknown phase {c.phase!r}")
-    return _with_rule(head + body, goal, no_goal)
+    return _with_rule(head + body, goal, no_goal, p.render("standing-rule", values))
 
 
 def _hours(seconds: float) -> str:
@@ -237,7 +226,7 @@ def time_limit_note(entries: list[dict]) -> str:
 
 
 def wrap_up_message(c: Candidate, minutes: int, extensions: int, grace: float, index_lock: bool = False,
-                    goal: str | None = None) -> str:
+                    goal: str | None = None, profile: Profile | None = None) -> str:
     """Resumes a work session stopped at its last time limit and asks it to wrap up within `grace` minutes
     (wrap-up W5)."""
     ext = f" and {extensions} limit-check {'extension' if extensions == 1 else 'extensions'}" if extensions > 0 else ""
@@ -251,15 +240,13 @@ def wrap_up_message(c: Candidate, minutes: int, extensions: int, grace: float, i
         "what is done the way this phase reports it, and name what is left so the author can hand it over as a "
         "follow-up: "
     )
+    p = _profile(profile)
+    values = template_values(c, p)
     if c.phase == "apply":
-        text += (
-            "check off the finished tasks in the change's `tasks.md`, write the open ones under a `Left for a "
-            f"follow-up` note there, commit, and report with `ho done {c.handover} -m \"<summary>\"` whose summary "
-            "starts with `Wrapped up at the time limit.` and has a line `Left: <what is left>`. " + APPLY_NO_ARCHIVE
-        )
+        text += p.render("wrap-up-apply", values)
     else:
-        text += "say what is left on a line starting `Left:` in your final message. " + _closing(c)
-    return _with_rule(text, goal)
+        text += "say what is left on a line starting `Left:` in your final message. " + values["closing"]
+    return _with_rule(text, goal, rule=p.render("standing-rule", values))
 
 
 TIMEOUT_LABELS ={"idle_timeout": "the inactivity limit (no output for too long)",
@@ -275,7 +262,8 @@ INTERRUPT_LABELS = {
 }
 
 
-def timeout_resume_message(c: Candidate, info: dict, index_lock: bool = False, goal: str | None = None) -> str:
+def timeout_resume_message(c: Candidate, info: dict, index_lock: bool = False, goal: str | None = None,
+                           profile: Profile | None = None) -> str:
     """Resumes a session the dispatcher ended by a time limit after it made progress (design T4), or one that was
     interrupted: the computer slept, the owner ended it, the dispatcher stopped (sleep-aware D5)."""
     reason = info.get("reason") or "max_time"
@@ -300,8 +288,8 @@ def timeout_resume_message(c: Candidate, info: dict, index_lock: bool = False, g
     if reason == "idle_timeout":
         text += " A single step that produces no output for that long is cut again: split long waits into shorter steps."
     if stopped_phase != c.phase:
-        return text + f"\n\nThen do the next phase in this session:\n\n{phase_prompt(c, goal)}"
-    return text + " " + _closing(c)
+        return text + f"\n\nThen do the next phase in this session:\n\n{phase_prompt(c, goal, profile=profile)}"
+    return text + " " + _closing(c, profile)
 
 
 def blocked_section(blocked: list[dict]) -> str:
@@ -406,10 +394,12 @@ VERDICT_SCHEMA = {
 
 
 def consult_prompt(question: dict, team: str, handover: str, change: str | None, goal: str | None = None,
-                   no_goal: str | None = None) -> str:
+                   no_goal: str | None = None, label: str = "OpenSpec change") -> str:
+    """`label`: how the asking team's profile names its artefact; empty for a profile without one
+    (workflow-profiles D8)."""
     return (
         f"Consultation, not a work session. The `{team}` team, working on handover {handover}"
-        f"{f' (OpenSpec change `{change}`)' if change else ''}, has asked this question:\n\n"
+        f"{f' ({label} `{change}`)' if change and label else ''}, has asked this question:\n\n"
         f"{json.dumps(question, indent=2, ensure_ascii=False)}\n\n"
         "Decide whether the answer can affect product success, user count or other key product "
         "figures. Read the backlog and product documents if useful. Do not change anything: no file "
@@ -544,12 +534,14 @@ def guidance_notice(given: str, current: str) -> str:
 GOAL_ONLY_THIS_RUN = "Only this run's goal sets the order of work; goals of earlier runs have ended."  # D6
 
 
-def goal_check_prompt(goal: str, notice: str = "", running: list[dict] | None = None) -> str:
+def goal_check_prompt(goal: str, notice: str = "", running: list[dict] | None = None,
+                      finished: str = "closed handovers, archived OpenSpec changes") -> str:
+    """`finished`: the finished work of the profiles in use (`workflow.finished_words`, workflow-profiles D8)."""
     return _with_rule(
         _HUB + "Goal check: the owner started a goal run, and no team has work waiting now.\n\n"
         + work_in_progress(running) + notice
         + "Compare the goal below with the hub (your handovers and their results), the backlog and what the "
-        "teams have finished so far (closed handovers, archived OpenSpec changes). " + GOAL_ONLY_THIS_RUN + " Then:\n"
+        f"teams have finished so far ({finished}). " + GOAL_ONLY_THIS_RUN + " Then:\n"
         "- if goal work is left that a team can do without the owner, hand over the next piece through the hub "
         "as you normally would: exactly one backlog item per handover, the smallest useful piece. Bundle items "
         "only when they are strongly linked (one cannot be done or accepted without the other) or there is a "
@@ -588,14 +580,15 @@ def escalation_title(team: str, reason: str) -> str:
 
 def escalation_body(*, team: str, handover: str, reason: str, phase: str | None, change: str | None,
                     question, result_tail: str, session: str | None, repo: str,
-                    denied: list[dict] | None = None) -> str:
-    """`denied`: the session's denials as `denial_entry` dicts, listed under `## Denied` (fewer-owner-waits D8)."""
+                    denied: list[dict] | None = None, label: str = "OpenSpec change") -> str:
+    """`denied`: the session's denials as `denial_entry` dicts, listed under `## Denied` (fewer-owner-waits D8);
+    `label`: how the team's profile names its artefact, empty for none (workflow-profiles D8)."""
     lines = [
         f"The dispatcher stopped work on {handover} for team `{team}` and needs your decision.",
         "",
         f"- Reason: {reason}",
         f"- Handover: {handover}" + (f", phase {phase}" if phase else "")
-        + (f", OpenSpec change `{change}`" if change else ""),
+        + (f", {label} `{change}`" if change and label else ""),
         f"- Session: `{session or '-'}`",
     ]
     if isinstance(question, str) and question.strip():  # a text question (a denial, fewer-owner-waits D8)

@@ -57,16 +57,16 @@ def start_time(now: str, inboxes: dict, shows: dict) -> dt.datetime:
 def simulate(teams: list[tuple[str, str]], inboxes: dict[str, dict], shows: dict[str, dict],
              records: dict[str, dict], held: dict[str, list] | None, steps: int, now: str, *,
              goal: bool = False, idle_ask: bool = False, product: str | None = None,
-             skip: set[str] = frozenset()) -> Forecast:
-    """The next `steps` steps of a run on this snapshot; `skip`: items the next loop would escalate (as in dry-run).
-    The inputs are not changed."""
+             skip: set[str] = frozenset(), phases: dict[str, tuple[str, ...]] | None = None) -> Forecast:
+    """The next `steps` steps of a run on this snapshot; `skip`: items the next loop would escalate (as in dry-run);
+    `phases`: team -> its workflow profile's work phases (workflow-profiles D6). The inputs are not changed."""
     inboxes, shows, records = copy.deepcopy(inboxes), copy.deepcopy(shows), copy.deepcopy(records)
     held = copy.deepcopy(held or {})
     t = start_time(now, inboxes, shows)
     out = Forecast()
     kinds = dict(teams)
     while len(out.steps) < steps:
-        cands = [c for c in sel.ordered(sel.candidates(teams, inboxes, shows, records, held)) if c.handover not in skip]
+        cands = [c for c in sel.ordered(sel.candidates(teams, inboxes, shows, records, held, phases)) if c.handover not in skip]
         if not cands:
             if goal:
                 out.steps.append(Step(product or "product team", "goal check", None, "", "a verdict"))

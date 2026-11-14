@@ -23,11 +23,13 @@ from . import forecast
 from . import machine as machine_mod
 from . import prompts
 from . import select as sel
+from . import workflow
 from .awake import FORMS as KEEP_AWAKE_FORMS, KeepAwake, Keeper, cover_end_time, parse_keep_awake, wanted
 from .clock import Sleep, SleepWatch, awake, parse_until
 from .hub import Hub, HoError, check_ho, hub_lock_message
 from .runner import WRAP_UP, Runner, SessionResult, kill_pid_tree
 from .state import GoalRun, RunLog, State, now_ts, read_goal, write_json_atomic
+from .workflow import branch_heads, commits_outside, git_out, new_commits  # noqa: F401 (moved; kept importable)
 
 CONSULT_TOOLS = ["Read", "Grep", "Glob"]
 BUDGET_OPTIONS = {"five_hour": "--budget-5h", "seven_day": "--budget-7d"}  # run usage budget (run-usage-budget D1)
@@ -298,9 +300,45 @@ class Dispatcher:
                 self.problem(f"ho show {hid} failed: {exc}")
         return [(t.id, t.kind) for t in self.cfg.teams], inboxes, shows, held
 
-    def plan(self, held: dict[str, list] | None = None) -> list[sel.Candidate]:
+    def plan(self, held: dict[str, list] | None = None, dry: bool = False) -> list[sel.Candidate]:
+        """`dry`: a dry run only reports the items it would finish without an archive phase."""
         teams, inboxes, shows, held = self.snapshot(held)
-        return sel.ordered(sel.candidates(teams, inboxes, shows, self.state.records, held))
+        for hid in self.closed_without_archive(shows):
+            if dry:
+                rec = self.state.get(hid)
+                self.out(f"Would finish: {rec.get('team')} {hid} (closed by the author; profile "
+                         f"{self.profile(rec.get('team')).name} has no archive phase)")
+            else:
+                self.finish_without_archive(hid)
+        return sel.ordered(sel.candidates(teams, inboxes, shows, self.state.records, held, self.cfg.team_phases()))
+
+    def profile(self, team: str) -> workflow.Profile:
+        """The team's workflow profile (workflow-profiles D2)."""
+        return self.cfg.profile_of(team)
+
+    def closed_without_archive(self, shows: dict[str, dict]) -> list[str]:
+        """Records whose team reported `done`, whose author closed the handover, and whose team's profile has no
+        archive phase: finished without a session (workflow-profiles D6)."""
+        found = []
+        for hid, rec in self.state.records.items():
+            team = rec.get("team")
+            if (rec.get("phase") != "done" or team not in self.cfg.team_ids() or self.state.blocked(hid)
+                    or self.profile(team).has("archive")):
+                continue
+            show = shows.get(hid)
+            if show and sel.is_closed(show):
+                found.append(hid)
+        return found
+
+    def finish_without_archive(self, hid: str) -> None:
+        rec = self.state.get(hid)
+        rec["phase"] = "archived"  # the finished phase every consumer knows (workflow-profiles D6)
+        rec.pop("resume_after_timeout", None)
+        name = self.profile(rec.get("team")).name
+        self.log.write("closed_without_archive", team=rec.get("team"), handover=hid, profile=name)
+        self.out(f"{stamp()}  {rec.get('team')} {hid}: closed by the author; finished (profile {name} has no "
+                 "archive phase)")
+        self.state.save()
 
     # ---- one work item
 
@@ -322,7 +360,8 @@ class Dispatcher:
         self.log.write("resume_after_timeout", team=cand.team, handover=cand.handover, session=info["session"],
                        reason=info.get("reason"), duration_s=info.get("duration_s"), phase=cand.phase)
         step = "resume after time limit" if info.get("reason") in TIME_LIMIT else "resume after interruption"
-        result = self.session(cand.team, prompts.timeout_resume_message(cand, info, lock.is_file(), goal)
+        result = self.session(cand.team, prompts.timeout_resume_message(cand, info, lock.is_file(), goal,
+                                                                        self.profile(cand.team))
                               + self.parallel_note(), cand.phase, cand.handover, resume=info["session"], title=title,
                               step=step)
         if resume_failed(result):
@@ -389,7 +428,7 @@ class Dispatcher:
         repo = self.cfg.team(team).repo
         work = bool(handover) and phase != "consult"
         rec = self.state.ensure(handover, team) if work else None
-        base = snapshot(repo, rec.get("change")) if work and since is None else None
+        base = self.profile(team).checks.snapshot(repo, rec.get("change")) if work and since is None else None
         self.log.write("session_start", team=team, repo=str(repo), handover=handover, phase=phase,
                        prompt=prompt, resume=resume)
         if handover and not title:
@@ -517,7 +556,7 @@ class Dispatcher:
                              phase=phase, recency="", team_index=0, change=rec.get("change"))
         lock = self.cfg.team(team).repo / ".git" / "index.lock"
         message = prompts.wrap_up_message(cand, round(r.duration_s / 60), r.extensions_used, self.cfg.wrap_up_minutes,
-                                          lock.is_file(), self.goal_for(team))
+                                          lock.is_file(), self.goal_for(team), self.profile(team))
         w = self.session(team, message, phase, handover, resume=r.session_id, since=since or r.started, title=title,
                          step="wrap-up", wrap_up=True)
         self.log.write("wrap_up", team=team, handover=handover, phase=phase, session=r.session_id,
@@ -631,7 +670,8 @@ class Dispatcher:
             body = body or prompts.escalation_body(team=team, handover=handover, reason=reason, phase=phase,
                                                    change=rec.get("change"), question=question,
                                                    result_tail=result_tail, session=session,
-                                                   repo=str(self.cfg.team(team).repo), denied=denied)
+                                                   repo=str(self.cfg.team(team).repo), denied=denied,
+                                                   label=self.profile(team).label)
             sent = self.send_to_owner(team, title or prompts.escalation_title(team, reason), body, handover, reason)
             if sent:
                 rec["escalation"] = {"handover": sent, "team": team, "session": session, "phase": phase,
@@ -767,7 +807,9 @@ class Dispatcher:
             else:  # no change to apply: the handover stays new and is proposed again (design P1)
                 self.log.write("propose_without_change", team=team, handover=hid, outcome=r.outcome,
                                session=r.session_id)
-                self.problem(f"{team} {hid}: propose created no OpenSpec change; the next session is propose again")
+                p = self.profile(team)
+                self.problem(f"{team} {hid}: propose created no {p.label or p.noun}; the next session is propose "
+                             "again")
         elif cand.phase == "apply":
             rec["phase"] = "apply"
         elif cand.phase == "act":
@@ -801,20 +843,19 @@ class Dispatcher:
                            timeout_reason=r.timeout_reason, **({"ignored": "change_notes"} if notes else {}))
             self.problem(f"{team} {hid}: no progress in this session "
                          f"({rec['no_progress']} of {self.cfg.no_progress_limit} before the item stalls)"
-                         + (" (commits changed only the change's own files)" if notes else ""))
+                         + (f" (commits changed only the {self.profile(team).noun}'s own files)" if notes else ""))
             if rec["no_progress"] >= self.cfg.no_progress_limit:
                 self.escalate(hid, team, f"stalled: {rec['no_progress']} sessions without progress", stalled=True,
                               session=r.session_id, phase=cand.phase, result_tail=tail(r))
 
     def session_change(self, team: str, handover: str, r: SessionResult) -> str | None:
-        """The change a propose session named or created."""
-        return (prompts.parse_change(r.result_text) or prompts.parse_change(r.assistant_text)
-                or find_change(self.cfg.team(team).repo, handover))
+        """The artefact a propose session named or created (the profile's check, workflow-profiles D5)."""
+        return self.profile(team).checks.artefact(self.cfg.team(team).repo, handover, r.result_text, r.assistant_text)
 
     def change_archived(self, team: str, rec: dict) -> bool:
-        """The item's change is known and its directory is gone from `team`'s repository."""
+        """The item's artefact is known and gone from `team`'s repository (the profile's check)."""
         change = rec.get("change")
-        return bool(change) and not (self.cfg.team(team).repo / "openspec" / "changes" / change).is_dir()
+        return bool(change) and self.profile(team).checks.archived(self.cfg.team(team).repo, change)
 
     def phase_complete(self, cand: sel.Candidate, rec: dict, r: SessionResult, since: str) -> bool:
         """The phase's own completion signal since `since` (escalate-denial D2): propose, a change; apply or act,
@@ -862,10 +903,11 @@ class Dispatcher:
         (escalate-denial D3). A product-team prompt of a run without a goal carries the no-goal block
         (goal-ends-with-run D1)."""
         no_goal = None if goal else self.no_goal_for(cand.team)
+        profile = self.profile(cand.team)
         if cand.phase == "review":
             return prompts.phase_prompt(cand, goal, denials=rec.pop("unescalated_denials", None),
-                                        time_limits=rec.get("time_limits"), no_goal=no_goal)
-        return prompts.phase_prompt(cand, goal, no_goal=no_goal)
+                                        time_limits=rec.get("time_limits"), no_goal=no_goal, profile=profile)
+        return prompts.phase_prompt(cand, goal, no_goal=no_goal, profile=profile)
 
     def hub_phase(self, handover: str, rec: dict, since: str) -> None:
         """Move the record's phase on the worker's `done` / `decline` or a return to the worker since `since`."""
@@ -890,8 +932,9 @@ class Dispatcher:
         """Progress sources since the item's work began (spec: Session outcome; design T3): `hub` (activity of
         `team` on the handover or a new handover from it), `commits` (new commits on any branch of its repository
         since the snapshot `base`), `tasks` (more checked tasks in the change's tasks.md than in `base`).
-        In apply and act with a known change, commits count only if they change a file outside the change's own
-        directory (no-loop N2); otherwise `"change_notes"` is added to `ignored`."""
+        Hub progress is the core's; the repository sources come from the team's profile (workflow-profiles D5): for
+        `openspec`, in apply and act with a known change, commits count only if they change a file outside the
+        change's own directory (no-loop N2); otherwise `"change_notes"` is added to `ignored`."""
         sources = []
         try:
             show = self.hub.show(handover)
@@ -907,18 +950,7 @@ class Dispatcher:
             if any(e.get("team") == team for e in new) or any(h.get("created", "") > since for h in sent):
                 sources.append("hub")
         if base:  # missing for items started before the snapshot existed: hub-only progress
-            repo = self.cfg.team(team).repo
-            if base.get("heads") is not None and new_commits(repo, base["heads"]):
-                change = base.get("change")
-                if (phase in ("apply", "act") and change
-                        and not commits_outside(repo, base["heads"], f"openspec/changes/{change}/")):
-                    if ignored is not None:
-                        ignored.append("change_notes")
-                else:
-                    sources.append("commits")
-            if base.get("change") and base.get("tasks") is not None:
-                if (checked_tasks(repo, base["change"]) or 0) > base["tasks"]:
-                    sources.append("tasks")
+            sources += self.profile(team).checks.progress(self.cfg.team(team).repo, base, phase, ignored)
         return sources
 
     # ---- product triage (design D10)
@@ -935,7 +967,8 @@ class Dispatcher:
             return None
         goal = self.goal_for(tri.team)
         consult = self.session(tri.team, prompts.consult_prompt(question, team, hid, rec.get("change"), goal,
-                                                                None if goal else self.no_goal_for(tri.team)),
+                                                                None if goal else self.no_goal_for(tri.team),
+                                                                self.profile(team).label),
                                "consult", hid, tools=CONSULT_TOOLS, json_schema=prompts.VERDICT_SCHEMA,
                                title=rec.get("title") or cand.title)
         if consult.outcome == "interrupted":  # the asking session is resumed and asks again (sleep-aware D4)
@@ -1455,7 +1488,9 @@ class Dispatcher:
         self.log.write("goal_check", team=team, guidance_changed=bool(notice))
         if notice:
             self.out("    the owner's guidance changed: goal check first")
-        r = self.session(team, prompts.goal_check_prompt(self.goal_for(team), notice, self.wip()), "goal", None,
+        r = self.session(team, prompts.goal_check_prompt(self.goal_for(team), notice, self.wip(),
+                                                         workflow.finished_words(self.cfg.profiles_in_use())),
+                         "goal", None,
                          json_schema=prompts.GOAL_SCHEMA)
         if r.outcome in ("usage_limit", "interrupted"):  # no verdict to judge: the check runs again
             return None
@@ -2562,82 +2597,15 @@ def resume_failed(r: SessionResult) -> bool:
     return r.outcome == "error" and not r.has_result and not r.killed and not r.timed_out
 
 
-def git_out(repo: Path, *args: str) -> str | None:
-    """Read-only git query in a team repository; None when it is not a git repository or git fails."""
-    try:
-        p = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return p.stdout if p.returncode == 0 else None
-
-
-def branch_heads(repo: Path) -> list[str] | None:
-    out = git_out(repo, "for-each-ref", "--format=%(objectname)", "refs/heads")
-    return None if out is None else sorted(set(out.split()))
-
-
-def new_commits(repo: Path, old_heads: list[str]) -> bool:
-    """A branch head points to a commit not reachable from the old heads (a reset or deletion is not progress)."""
-    heads = branch_heads(repo)
-    changed = [h for h in heads or [] if h not in old_heads]
-    if not changed:
-        return False
-    out = git_out(repo, "rev-list", "--max-count=1", *changed, "--not", *old_heads, "--")
-    return bool(out and out.strip())
-
-
-def commits_outside(repo: Path, old_heads: list[str], prefix: str) -> bool:
-    """The commits not reachable from the old heads change at least one path outside `prefix` (no-loop N2).
-    If git cannot tell, they count (as before)."""
-    changed = [h for h in branch_heads(repo) or [] if h not in old_heads]
-    if not changed:
-        return False
-    out = git_out(repo, "-c", "core.quotepath=off", "log", "--name-only", "--format=", *changed,
-                  "--not", *old_heads, "--")
-    if out is None:
-        return True
-    return any(p.strip() and not p.strip().startswith(prefix) for p in out.splitlines())
-
-
-CHECKED_RE = re.compile(r"^\s*[-*] \[[xX]\]", re.M)
-
-
-def checked_tasks(repo: Path, change: str) -> int | None:
-    path = Path(repo) / "openspec" / "changes" / change / "tasks.md"
-    try:
-        return len(CHECKED_RE.findall(path.read_text(encoding="utf-8", errors="replace")))
-    except OSError:
-        return None
-
-
 def snapshot(repo: Path, change: str | None) -> dict:
-    """Taken when an item's work begins; made_progress compares against it (design T3)."""
-    return {"heads": branch_heads(repo), "change": change,
-            "tasks": checked_tasks(repo, change) if change else None}
+    """Taken when an item's work begins; made_progress compares against it (design T3); the default profile's check
+    (the dispatcher asks the team's profile)."""
+    return workflow.builtin(workflow.DEFAULT_PROFILE).checks.snapshot(repo, change)
 
 
 def base_of(rec: dict, since: str) -> dict | None:
     """The snapshot of the session that began the item's work at `since`."""
     return next((s.get("base") for s in rec["sessions"] if s.get("started") == since and s.get("base")), None)
-
-
-def find_change(repo: Path, handover: str) -> str | None:
-    """Fallback: newest change directory whose files mention the handover ID."""
-    changes = Path(repo) / "openspec" / "changes"
-    if not changes.is_dir():
-        return None
-    found = []
-    for d in changes.iterdir():
-        if not d.is_dir() or d.name == "archive":
-            continue
-        for f in d.rglob("*.md"):
-            try:
-                if handover in f.read_text(encoding="utf-8", errors="replace"):
-                    found.append((d.stat().st_mtime, d.name))
-                    break
-            except OSError:
-                continue
-    return max(found)[1] if found else None
 
 
 # -- CLI --------------------------------------------------------------------------------
@@ -2775,7 +2743,7 @@ def dry_run(d: Dispatcher) -> int:
               f"{waits_text(waits)}")
     if answers:
         print("\nOwner answers are handled before any new candidate.")
-    cands = [c for c in d.plan(held) if c.handover not in escalating]
+    cands = [c for c in d.plan(held, dry=True) if c.handover not in escalating]
     if d.goal:
         print(f"Goal run: {d.goal.path} (at most {d.goal.max_sessions} sessions, {d.goal.max_hours:g} h); "
               f"the goal text is added to every prompt of {d.product_team()}.")
@@ -2783,7 +2751,8 @@ def dry_run(d: Dispatcher) -> int:
         print("Nothing to do: no selectable candidate.")
         if d.goal:
             print(f"Goal run: would run a goal check in {d.product_team()} instead of polling.\nPrompt:\n"
-                  + prompts.goal_check_prompt(d.goal.text))
+                  + prompts.goal_check_prompt(d.goal.text,
+                                              finished=workflow.finished_words(d.cfg.profiles_in_use())))
             return 0
         if d.cfg.idle_ask and d.product_team():
             for line in idle_dry_run(d):
@@ -2801,8 +2770,9 @@ def dry_run(d: Dispatcher) -> int:
     lock = (d.cfg.team(c.team).repo / ".git" / "index.lock").is_file()
     goal = d.goal_for(c.team)
     no_goal = None if goal else d.no_goal_for(c.team)
-    print("Prompt:\n" + (prompts.timeout_resume_message(c, c.timeout_resume, lock, goal) if c.timeout_resume
-                         else prompts.phase_prompt(c, goal, no_goal=no_goal)))
+    profile = d.profile(c.team)
+    print("Prompt:\n" + (prompts.timeout_resume_message(c, c.timeout_resume, lock, goal, profile) if c.timeout_resume
+                         else prompts.phase_prompt(c, goal, no_goal=no_goal, profile=profile)))
     return 0
 
 
@@ -2882,7 +2852,8 @@ def plan_run(d: Dispatcher, steps: int, goal: GoalRun | None, max_sessions: int 
                   if (item := d.waiting_item(w))}  # escalated by the next loop before selection, as in dry_run
     teams, inboxes, shows, held = d.snapshot(d.holds(scan))
     f = forecast.simulate(teams, inboxes, shows, d.state.records, held, steps, now_ts(), goal=goal is not None,
-                          idle_ask=d.cfg.idle_ask, product=d.product_team(), skip=escalating)
+                          idle_ask=d.cfg.idle_ask, product=d.product_team(), skip=escalating,
+                          phases=d.cfg.team_phases())
     limit = (max_sessions or d.cfg.goal_max_sessions) if goal else None
     for n, s in enumerate(f.steps, 1):
         phase = s.phase + (" (resume)" if s.resume else "")

@@ -1,0 +1,1 @@
+You are run unattended by a dispatcher; no user is available. Never ask the user: when you would ask, choose the best variant yourself, record the assumption in the change (design or tasks notes), and continue. Stop only when this phase is complete or blocked by something outside this repository.

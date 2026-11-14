@@ -114,16 +114,26 @@ def _timeout_resume(rec: dict | None, team: str) -> dict | None:
     return found if found and found.get("team") == team and found.get("session") else None
 
 
-def work_phase(kind: str, item: dict, rec: dict | None) -> str:
+FULL_PHASES = ("propose", "apply", "archive")  # the `openspec` profile's work phases, the default
+
+
+def work_phase(kind: str, item: dict, rec: dict | None, phases: tuple[str, ...] = FULL_PHASES) -> str:
+    """`phases`: the work phases of the team's workflow profile; without propose a new handover goes straight to
+    apply (workflow-profiles D6)."""
     if kind == "product":
         return "act"
+    if "propose" not in phases:
+        return "apply"
     started = rec is not None and (rec.get("change") or rec.get("phase") in ("apply", "done"))
     return "apply" if started or item.get("my_state") == "returned" else "propose"
 
 
 def candidates(teams: list[tuple[str, str]], inboxes: dict[str, dict], shows: dict[str, dict],
-               records: dict[str, dict], held: dict[str, list] | None = None) -> list[Candidate]:
+               records: dict[str, dict], held: dict[str, list] | None = None,
+               phases: dict[str, tuple[str, ...]] | None = None) -> list[Candidate]:
     """teams: (id, kind) in configuration order; inboxes: team -> `ho inbox --json`;
+    phases: team -> the work phases of its workflow profile (default: propose, apply, archive); a team without an
+    archive phase gets no archive candidate (workflow-profiles D6);
     shows: handover ID -> `ho show --json`; records: state records by handover ID;
     held: items waiting for a handover's result (`held_items`), not offered as work (design H4); exceptions: a return
     by the sender releases a held item for one session per return (no-loop N1), and a cut session resumes once."""
@@ -138,7 +148,7 @@ def candidates(teams: list[tuple[str, str]], inboxes: dict[str, dict], shows: di
             if _blocked(rec) or is_escalation(item, links):
                 continue
             show = shows.get(hid, {})
-            phase = work_phase(kinds[tid], item, rec)
+            phase = work_phase(kinds[tid], item, rec, (phases or {}).get(tid, FULL_PHASES))
             timed = _timeout_resume(rec, tid)
             released = item.get("my_state") == "returned" and not return_used(show, rec, tid)  # one session (N1)
             if held and held.get(hid) and not released and not timed:
@@ -165,6 +175,8 @@ def candidates(teams: list[tuple[str, str]], inboxes: dict[str, dict], shows: di
     for hid, rec in records.items():
         tid = rec.get("team")
         if rec.get("phase") != "done" or kinds.get(tid) != "technical" or _blocked(rec):
+            continue
+        if "archive" not in (phases or {}).get(tid, FULL_PHASES):  # finished by the dispatcher without a session
             continue
         show = shows.get(hid)
         if not show or not is_closed(show):

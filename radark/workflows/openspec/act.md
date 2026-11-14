@@ -1,0 +1,1 @@
+${hub_sync}Act on the handover per the hub guide (AGENTS.md in the hub): read it with `ho show $handover --json` and take the expected action ($expects). Routine work needs no OpenSpec change. $blocked_note

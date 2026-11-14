@@ -1,0 +1,13 @@
+# Built-in workflow profile `openspec` (the default): spec-driven work with OpenSpec changes.
+phases = ["propose", "apply", "archive"]
+noun = "change"
+artefact_label = "OpenSpec change"
+finished_words = "archived OpenSpec changes"
+artifact_dir = "openspec/changes/{name}"
+
+[closing]
+propose = 'End your final message with one line `CHANGE: <change-name>` naming the change you created.'
+apply = 'When the work is finished, report it with `ho done $handover -m "<summary>"`.'
+review = 'If the result is accepted, close it with `ho close $handover`; otherwise return it with `ho return $handover --to <team> -m "<what to change>"`.'
+archive = 'Make no hub changes other than `ho sync`.'
+act = 'Take the expected action ($expects) and end with `ho sync`.'

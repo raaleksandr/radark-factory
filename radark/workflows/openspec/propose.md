@@ -1,0 +1,2 @@
+${hub_sync}Read the handover with `ho show $handover --json`, acknowledge it with `ho ack $handover`, and create an OpenSpec change for it (the /opsx:propose workflow) that cites $handover in its proposal. Do not implement it in this session. The change's tasks must not include archiving the change or syncing its specs: archive is a separate phase that runs after the author closes the handover, so `ho done` is the last step of apply.
+$closing

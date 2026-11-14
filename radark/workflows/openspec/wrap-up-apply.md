@@ -1,0 +1,1 @@
+check off the finished tasks in the change's `tasks.md`, write the open ones under a `Left for a follow-up` note there, commit, and report with `ho done $handover -m "<summary>"` whose summary starts with `Wrapped up at the time limit.` and has a line `Left: <what is left>`. $apply_no_archive

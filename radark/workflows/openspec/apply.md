@@ -1,0 +1,1 @@
+${hub_sync}Implement $change_ref for $handover (the /opsx:apply workflow). $apply_no_archive $closing $apply_local_todo If you need another team, send your own handover with `ho new` and stop that part. $blocked_note

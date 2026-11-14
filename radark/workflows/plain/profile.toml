@@ -1,0 +1,11 @@
+# Built-in workflow profile `plain`: no spec-driven process. One work session per handover: do the task, test it,
+# commit locally, report with `ho done`. No propose and no archive phase, no artefact directory.
+phases = ["apply"]
+noun = "task"
+artefact_label = ""
+finished_words = "closed handovers"
+
+[closing]
+apply = 'When the work is finished, report it with `ho done $handover -m "<summary>"`.'
+review = 'If the result is accepted, close it with `ho close $handover`; otherwise return it with `ho return $handover --to <team> -m "<what to change>"`.'
+act = 'Take the expected action ($expects) and end with `ho sync`.'

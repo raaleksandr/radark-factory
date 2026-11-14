@@ -7,7 +7,8 @@ claude = "claude"
 owner_team = "owner"          # hub team of the human owner: escalation handovers go there (must be in hub.json)
 
 # Teams in priority order (ties in recency go to the earlier team).
-# kind = "technical": OpenSpec phases (propose / apply / archive); "product": act on handovers directly.
+# kind = "technical": the phases of its workflow profile (openspec: propose / apply / archive); "product": act on
+# handovers directly. profile = "plain" in a team entry overrides [workflow] profile for that team.
 [[teams]]
 id = "strategy"
 repo = 'D:\work\strategy'
@@ -27,6 +28,11 @@ kind = "technical"
 id = "backend"
 repo = 'D:\work\backend'
 kind = "technical"
+
+# [workflow]                   # the work process (radark/README.md, "Workflow profiles")
+# profile = "openspec"         # default for every team; built-in: openspec (OpenSpec changes), plain (one work
+#                              # session per handover: do, test, commit, ho done; no propose / archive)
+# dir = "workflows"            # prompt overrides (<dir>/<profile>/<template>.md) and user-defined profiles
 
 [launch]
 permission_mode = "auto"      # never bypassPermissions

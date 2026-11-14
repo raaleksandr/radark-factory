@@ -8,6 +8,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import workflow
 from .awake import DEFAULT as KEEP_AWAKE_DEFAULT, KeepAwake, parse_keep_awake
 
 DEFAULT_ANSWER = (
@@ -30,6 +31,7 @@ class Team:
     id: str
     repo: Path
     kind: str
+    profile: str = workflow.DEFAULT_PROFILE  # the team's workflow profile (workflow-profiles D1)
 
 
 @dataclass
@@ -72,6 +74,9 @@ class Config:
     goal_max_sessions: int = 40  # safety limits of a goal run (goal-run design G1)
     goal_max_hours: float = 12
     parallel_sessions: int = 1  # sessions at once, one per repository and handover (parallel-sessions D1)
+    workflow_default: str = workflow.DEFAULT_PROFILE  # `[workflow] profile` (workflow-profiles D1)
+    workflow_dir: Path | None = None  # `[workflow] dir`, resolved; None when the default directory is absent
+    profiles: dict[str, workflow.Profile] = field(default_factory=dict)  # loaded profiles by name
 
     def team(self, team_id: str) -> Team:
         for t in self.teams:
@@ -81,6 +86,26 @@ class Config:
 
     def team_ids(self) -> list[str]:
         return [t.id for t in self.teams]
+
+    def profile_of(self, team_id: str) -> workflow.Profile:
+        """The workflow profile of a configured team; `openspec` for a team not configured."""
+        try:
+            name = self.team(team_id).profile
+        except KeyError:
+            name = self.workflow_default
+        return self.profiles.get(name) or workflow.builtin(name if name in workflow.BUILTINS
+                                                           else workflow.DEFAULT_PROFILE)
+
+    def team_phases(self) -> dict[str, tuple[str, ...]]:
+        """team -> the work phases of its profile, for selection and predictions (workflow-profiles D6)."""
+        return {t.id: self.profile_of(t.id).phases for t in self.teams}
+
+    def profiles_in_use(self) -> list[workflow.Profile]:
+        """The profiles of the configured teams, deduplicated, in configuration order."""
+        return [self.profiles_by_name()[n] for n in dict.fromkeys(t.profile for t in self.teams)]
+
+    def profiles_by_name(self) -> dict[str, workflow.Profile]:
+        return {t.profile: self.profile_of(t.id) for t in self.teams}
 
 
 def _missing_hint(name: str) -> str:
@@ -149,7 +174,10 @@ def load(path: str | Path) -> Config:
             raise ConfigError(f"team '{tid}': repository path does not exist: {repo}")
         if any(x.id == tid for x in teams):
             raise ConfigError(f"team '{tid}' is listed twice")
-        teams.append(Team(tid, repo, kind))
+        profile = t.get("profile")
+        if profile is not None and (not isinstance(profile, str) or not profile):
+            raise ConfigError(f"team '{tid}': profile must be a workflow profile name, not {profile!r}")
+        teams.append(Team(tid, repo, kind, profile or ""))
 
     launch = data.get("launch", {})
     answers = data.get("answers", {})
@@ -186,6 +214,7 @@ def load(path: str | Path) -> Config:
         goal_max_hours=float(goal.get("max_hours", 12)),
         parallel_sessions=loop.get("parallel_sessions", 1),
     )
+    _workflow(cfg, data.get("workflow", {}), base)
     if cfg.owner_team in cfg.team_ids():
         raise ConfigError(f"owner_team '{cfg.owner_team}' is the human owner and must not be listed in [[teams]]")
     if cfg.session_idle_minutes <= 0 or cfg.session_max_minutes <= 0:
@@ -231,6 +260,35 @@ def load(path: str | Path) -> Config:
     return cfg
 
 
+def _workflow(cfg: Config, section, base: Path) -> None:
+    """`[workflow]` and the per-team `profile`: resolve every team's profile and load each one used, so a broken
+    profile fails at start with exit 2 (workflow-profiles D1)."""
+    if not isinstance(section, dict):
+        raise ConfigError("[workflow] must be a table")
+    unknown = sorted(set(section) - {"profile", "dir"})
+    if unknown:
+        raise ConfigError(f"workflow.{unknown[0]} is not a setting (allowed: profile, dir)")
+    default = section.get("profile", workflow.DEFAULT_PROFILE)
+    if not isinstance(default, str) or not default:
+        raise ConfigError(f"workflow.profile must be a workflow profile name, not {default!r}")
+    raw_dir = section.get("dir")
+    if raw_dir is not None and (not isinstance(raw_dir, str) or not raw_dir):
+        raise ConfigError(f"workflow.dir must be a path, not {raw_dir!r}")
+    directory = (base / (raw_dir or workflow.DEFAULT_DIR)).resolve()
+    if raw_dir is not None and not directory.is_dir():
+        raise ConfigError(f"workflow.dir: the profile directory does not exist: {directory}")
+    cfg.workflow_default = default
+    cfg.workflow_dir = directory if directory.is_dir() else None
+    for t in cfg.teams:
+        t.profile = t.profile or default
+        if t.profile in cfg.profiles:
+            continue
+        try:
+            cfg.profiles[t.profile] = workflow.load_profile(t.profile, cfg.workflow_dir)
+        except workflow.ProfileError as exc:
+            raise ConfigError(f"team '{t.id}', workflow profile '{t.profile}': {exc}") from exc
+
+
 def check_owner(cfg: Config, hub_teams: list[str]) -> None:
     """The owner must be a hub team (added to hub.json by hand), or escalation handovers cannot be sent."""
     if cfg.owner_team not in hub_teams:
@@ -250,9 +308,15 @@ def summary(cfg: Config, version: str, ho: str | None = None) -> str:
     """`ho`: the `ho` version line text, e.g. `0.2.0 (contract 1)` (ho-contract-check D4)."""
     lines = [f"Hub: {cfg.hub}", "Teams (in priority order):"]
     for t in cfg.teams:
-        lines.append(f"  {t.id:<22} {t.kind:<9} {t.repo}")
+        lines.append(f"  {t.id:<22} {t.kind:<9} {t.profile:<9} {t.repo}")
     if cfg.triage:
         lines.append(f"Triage: questions of {', '.join(cfg.triage.teams)} -> {cfg.triage.team}")
+    custom = [n for n in dict.fromkeys(t.profile for t in cfg.teams) if n not in workflow.BUILTINS]
+    overrides = [o for p in cfg.profiles_in_use() for o in p.overrides()]
+    if cfg.workflow_dir and (custom or overrides):  # workflow-profiles D9
+        parts = ([f"overrides: {', '.join(overrides)}"] if overrides else []) + (
+            [f"user-defined: {', '.join(custom)}"] if custom else [])
+        lines.append(f"Workflow profiles: {cfg.workflow_dir} ({'; '.join(parts)})")
     lines.append(f"Owner (escalations): {cfg.owner_team}")
     lines.append(f"Claude Code: {version}")
     if ho:

@@ -21,7 +21,8 @@ Runtime: Python 3.12, standard library only. Tests: `pytest`. Tested with Claude
 | `run_dir` | run-time directory, default `.harness` (relative to the config file) |
 | `ho`, `claude` | command name on `PATH`, or a list such as `["python", "D:\\...\\ho.py"]` |
 | `owner_team` | hub team of the human owner, default `owner`; escalation handovers go there. It must be a hub team (`ho teams`) and must not be in `[[teams]]`; `run` / `dry-run` refuse to start otherwise |
-| `[[teams]]` `id`, `repo`, `kind` | in priority order; `kind = "technical"` (propose / apply / archive) or `"product"` (act on handovers) |
+| `[[teams]]` `id`, `repo`, `kind`, `profile` | in priority order; `kind = "technical"` (the work phases of its profile: propose / apply / archive for `openspec`, apply only for `plain`) or `"product"` (act on handovers); `profile`: the team's workflow profile, default `[workflow] profile` (see **Workflow profiles**) |
+| `[workflow]` `profile`, `dir` | the pipeline-wide workflow profile, default `openspec` (built-in: `openspec`, `plain`); the profile directory for prompt overrides and user-defined profiles, default `workflows` next to the config file (may be absent; a `dir` given explicitly must exist). See **Workflow profiles** |
 | `[launch]` `permission_mode`, `extra_args` | default `auto`; `bypassPermissions` and `--bare` are refused |
 | `[answers]` `default`, `escalation_keywords` | the "choose the best variant" text; words that send a question to the owner (matched at a word start, case-insensitive, `ё` = `е`; the defaults include Russian stems such as `удал`, `пуш`, `депло`, `оплат`) |
 | `[triage]` `team`, `teams`, `max_per_handover` | product team that answers questions; `teams` limits whose questions are triaged (default: **every** team, the product team included); escalate after N triages per handover |
@@ -156,6 +157,109 @@ network or synced folder may not work).
   (configuration path, PID, start, sessions running), the slots in use, the shared usage and hold, and this
   configuration's repository conflicts. Of another pipeline only its configuration path, PID, start time and session
   count are shown.
+
+### Workflow profiles
+
+The work process of a team is a setting: a **workflow profile** names a team's phases, its prompt texts and the
+checks the dispatcher makes after a session.
+
+```toml
+[workflow]
+profile = "openspec"   # default for every team; built-in: openspec, plain
+dir = "workflows"      # profile directory, relative to harness.toml (default "workflows"; may be absent)
+
+[[teams]]
+id = "backend"
+repo = 'D:\work\backend'
+kind = "technical"
+profile = "plain"      # optional: this team's profile
+```
+
+Without any of these settings every team runs on `openspec`, exactly as before. An unknown profile, a `dir` given
+explicitly that does not exist, or a broken profile (a missing prompt template, an undocumented template variable,
+an invalid `profile.toml`) stops `run`, `once` and `dry-run` with exit code 2 and a message naming the team, the
+profile and the problem, before any session. The start lines and `dry-run` show each team's profile in the team
+list (`  backend                technical plain     D:\work\backend`) and, when a profile directory is in use, a line
+`Workflow profiles: <dir> (overrides: plain/apply.md; user-defined: spec-kit)`.
+
+**Built-in profiles**
+
+- `openspec` (default): spec-driven work with OpenSpec. Phases propose → apply → (the author's review) → archive;
+  propose must create a change in `openspec/changes/` that cites the handover (or name it with a `CHANGE:` line);
+  progress also counts checked tasks in the change's `tasks.md`, and in apply commits count only when they change a
+  file outside the change's own folder; archive is done when the change's folder is gone.
+- `plain`: no spec-driven process. A technical team gets **one work session per handover**, shown as `apply`: read
+  and acknowledge the handover, do the task, test it, commit locally, report with `ho done`. No propose and no archive
+  session, no change folder. Progress is new commits anywhere in the repository or the team's hub activity on the
+  handover (the no-progress limit, stall escalation and the one-session-per-return rule work as for `openspec`);
+  after the author closes the handover the item is finished without a session (log event `closed_without_archive`,
+  console line `<team> <ID>: closed by the author; finished (profile plain has no archive phase)`). A return gives one
+  more apply session that quotes the return comment; a wrap-up at the time limit asks for `ho done` with a
+  `Left:` line.
+
+Choose `plain` for a team without a spec-driven process, or for a pipeline of small and routine tasks (one-line
+fixes, version bumps, archive-only work) where a propose session costs more than it brings. A product team uses only
+its profile's `act`, `review` and standing-rule texts; its kind decides its phase, as before.
+
+**Overriding prompts.** A file `<dir>/<profile>/<template>.md` replaces that template of a built-in profile for every
+team on it; the other templates stay built-in. Templates: `propose`, `apply` (a new handover), `apply-returned` (a
+handover returned to the team), `review`, `archive`, `act`, `wrap-up-apply` (the end of the wrap-up text of an apply
+session at its time limit) and `standing-rule` (the "you are run unattended" rule at the end of every item prompt).
+The built-in texts are in `radark/workflows/<profile>/` of the installed package; copy one as a start. A directory
+named like a built-in profile holds only overrides: a `profile.toml` there, or a `.md` file that is not a template
+name, is refused. The core adds the parts that do not depend on the profile itself: the `Handover <ID> ("<title>").
+Phase: <phase>.` head, the review's denial and time-limit notes, the goal or no-goal block, the parallel and
+test-slot notes, and the long-wait and denial rules of the system prompt.
+
+**Defining a profile.** A directory `<dir>/<name>/` with a `profile.toml` defines the profile `<name>` (not a
+built-in name):
+
+```toml
+phases = ["propose", "apply", "archive"]   # apply is required; propose and archive are optional
+noun = "spec"                               # how texts name the item's artefact (default "task")
+artefact_label = "spec"                     # default = noun; used in consult and escalation texts
+finished_words = "archived specs"           # the goal check's "finished so far" (default "finished tasks")
+based_on = "openspec"                       # optional: templates not in this directory come from this built-in
+artifact_dir = "specs/{name}"               # required with propose or archive; one {name} in the last segment
+
+[closing]                                   # optional: each phase's closing sentence ($closing)
+propose = "End your final message with one line `CHANGE: <name>` naming the spec you created."
+```
+
+Unknown keys are refused. The profile needs a template for `apply`, `apply-returned`, `wrap-up-apply`, `review`,
+`act` and `standing-rule`, plus `propose` and `archive` when it declares them: in its directory, or from `based_on`.
+Closing sentences not given come from `based_on`, then from `plain`. Checks:
+
+- with `artifact_dir`: propose produced its artefact when the session ends with a `CHANGE: <name>` line or a
+  directory matching the pattern cites the handover ID (newest first); apply commits count as progress only when they
+  change a file outside that directory, and checked boxes in its `tasks.md` count; archive is done when the directory
+  is gone;
+- without `artifact_dir`: the `plain` checks; such a profile must not declare propose or archive.
+
+### Template variables
+
+Templates are [`string.Template`](https://docs.python.org/3/library/string.html#template-strings) texts: `$name` or
+`${name}` is replaced, `$$` is a literal `$`; any other `$name` is refused at start. A file's single trailing newline
+is dropped. Every variable is a string, empty when it does not apply:
+
+| Variable | Value |
+|---|---|
+| `$handover` | the handover ID |
+| `$title` | the handover's title |
+| `$phase` | the phase: `propose`, `apply`, `review`, `archive` or `act` |
+| `$team` | the team the session works for |
+| `$expects` | the handover's expected action (`done`, `response`, `ack`; `see the handover` when unknown) |
+| `$change` | the item's recorded artefact name (the change), empty if none |
+| `$change_ref` | how the prompt names the artefact: ``the OpenSpec change `add-x` `` or ``the OpenSpec change in `openspec/changes/` that cites <ID> (find it first)`` for `openspec`; the profile's `artefact_label` and `artifact_dir` for a user profile |
+| `$return_comment` | the author's return comment, each line quoted with `> ` (`> (no comment)` when empty); empty for a new handover |
+| `$hub_sync` | ``Start and end with `ho sync`. `` (with the trailing space) |
+| `$closing` | the phase's closing sentence from the profile's `[closing]` (not usable inside a closing sentence) |
+| `$apply_no_archive` | the `openspec` rule that apply must not archive the change or sync its specs |
+| `$apply_local_todo` | the rule to name changed local TODO entries on a `Local TODO:` line of the `ho done` summary |
+| `$blocked_note` | how a worker that only waits stops, the team-decides rule and the `BLOCKED: owner — …` line |
+| `$review_local_todo` | the reviewer's rule for `Local TODO:` lines in a result |
+| `$team_decides` | the team-decides rule alone (part of `$blocked_note`) |
+| `$noun` | the profile's noun (`change` for `openspec`, `task` for `plain`) |
 
 ## Commands
 
@@ -533,7 +637,9 @@ escalation.
   `denial_not_escalated`). The worker's denials kept this way are named in the item's next review prompt, which asks
   the reviewer to check that nothing required was skipped because of them; they are dropped once that prompt is built. Progress since the item's first session: hub activity
   by the team on the handover or a new handover from it, new commits on any branch of the team repository, or more
-  checked tasks in the change's `tasks.md` (uncommitted edits do not count). In apply and act, commits count only if
+  checked tasks in the change's `tasks.md` (uncommitted edits do not count). The repository part belongs to the team's
+  workflow profile (`plain`: new commits only, no folder filter; see **Workflow profiles**). For `openspec`, in apply
+  and act, commits count only if
   at least one of them changes a file outside the item's own change directory (`openspec/changes/<change>/`): a
   commit that only adds a "still waiting" note to the change's `tasks.md` is not progress, more checked tasks still
   are; the `no_progress` event then has `ignored: "change_notes"` and the console line ends with `(commits changed

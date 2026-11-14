@@ -16,7 +16,8 @@ Tested with Claude Code 2.1.302.
 ## How it fits together
 
 - **Teams** — Git repositories, each with its own `CLAUDE.md` and OpenSpec setup (see
-  [Owner-only actions / decisions the team takes](#owner-only-actions--decisions-the-team-takes)).
+  [Owner-only actions / decisions the team takes](#owner-only-actions--decisions-the-team-takes)), or, with the
+  `plain` workflow profile, no spec tool at all (see [Workflow profile](#workflow-profile)).
 - **Hub** — a directory (normally a Git repository) of Markdown handovers, edited only through the `ho` CLI
   from [radark-handover](https://github.com/raaleksandr/radark-handover) (installed with radark-factory).
 - **Dispatcher** (`radark`) — reads `ho inbox --json` for every team, picks the next step, launches Claude Code
@@ -46,6 +47,20 @@ consultation say to decide what the team's instructions allow, record the decisi
 blocking, and stop for the owner (`BLOCKED: owner — …`, a triage verdict `owner`) only for what those instructions
 reserve for the owner — or, where they say nothing, for a decision, money, credentials or a production step. Setting
 a pipeline's policy is the owner's task; without one, behaviour is as before.
+
+### Workflow profile
+
+How a team works is a setting (`[workflow] profile`, or `profile` in a `[[teams]]` entry): `openspec` (default:
+propose → apply → archive with OpenSpec changes) or `plain` (one session per handover: do the task, test it, commit
+locally, report with `ho done`; no propose or archive session). Prompts can be overridden per file and new profiles
+defined next to the configuration; see "Workflow profiles" in [radark/README.md](radark/README.md). Say the
+profile in the team's `CLAUDE.md`, so a session started by hand works the same way, for example:
+
+```markdown
+## Work process
+- This team runs on the `plain` workflow profile: no OpenSpec change. For a handover: read and acknowledge it,
+  do the task, run the tests that cover it, commit locally, and report with `ho done <ID> -m "<summary>"`.
+```
 
 ## Quick start
 

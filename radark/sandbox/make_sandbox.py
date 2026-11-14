@@ -2,10 +2,11 @@
 
     python radark/sandbox/make_sandbox.py <empty-or-new-dir> [--force]
 
-Creates <dir>/hub (a hub made with `ho init`, same team ids as the real hub), two git repositories
-<dir>/repos/app (technical) and <dir>/repos/product (product, with a tiny backlog),
-each with a minimal CLAUDE.md, OpenSpec (`openspec init --tools claude`) and .claude/settings.json pointing
-at the sandbox hub, and <dir>/harness.toml for the dispatcher. Never touches the real hub or teams."""
+Creates <dir>/hub (a hub made with `ho init`, same team ids as the real hub), three git repositories
+<dir>/repos/app (technical, workflow profile `openspec`), <dir>/repos/backend (technical, workflow profile `plain`,
+no OpenSpec) and <dir>/repos/product (product, with a tiny backlog), each with a minimal CLAUDE.md and
+.claude/settings.json pointing at the sandbox hub (OpenSpec, `openspec init --tools claude`, except `backend`), and
+<dir>/harness.toml for the dispatcher. Never touches the real hub or teams."""
 from __future__ import annotations
 
 import argparse
@@ -37,6 +38,20 @@ Python module, `greet.py`, with tests in `test_greet.py` (`python -m pytest -q`)
   in the hub directory) before acting on a handover.
 - Every task gets an OpenSpec change (`/opsx:propose`, then `/opsx:apply`, `/opsx:archive`), citing the
   handover ID in its proposal.
+- Never push to a remote; this repository has none.
+"""
+
+PLAIN_CLAUDE = """# CLAUDE.md — backend (SANDBOX)
+
+This is a throw-away sandbox copy of a technical team without a spec tool, used to test the `plain` workflow
+profile. The code is a tiny Python module, `greet.py`, with tests in `test_greet.py` (`python -m pytest -q`).
+
+## Work process
+- You are the technical team `backend`. Other teams reach you only through the handover hub, with the
+  `ho` CLI (`HO_HUB` and `HO_TEAM` are set in `.claude/settings.json`). Read the hub guide (`AGENTS.md`
+  in the hub directory) before acting on a handover.
+- This team runs on the `plain` workflow profile: no OpenSpec change. For a handover: read and acknowledge it,
+  do the task, run the tests that cover it, commit locally, and report with `ho done <ID> -m "<summary>"`.
 - Never push to a remote; this repository has none.
 """
 
@@ -87,14 +102,16 @@ def git_repo(path: Path) -> None:
     run(["git", "commit", "-q", "-m", "Sandbox initial state"], cwd=path)
 
 
-def team_repo(root: Path, hub: Path, team: str, claude_md: str, files: dict[str, str]) -> Path:
+def team_repo(root: Path, hub: Path, team: str, claude_md: str, files: dict[str, str],
+              openspec: bool = True) -> Path:
     repo = root / "repos" / team
     repo.mkdir(parents=True)
     (repo / "CLAUDE.md").write_text(claude_md, encoding="utf-8")
     for rel, text in files.items():
         (repo / rel).parent.mkdir(parents=True, exist_ok=True)
         (repo / rel).write_text(text, encoding="utf-8")
-    run(["openspec", "init", "--tools", "claude", "--no-animation"], cwd=repo)
+    if openspec:
+        run(["openspec", "init", "--tools", "claude", "--no-animation"], cwd=repo)
     settings = {
         "env": {"HO_HUB": str(hub), "HO_TEAM": team},
         "permissions": {"allow": ["Bash(ho:*)", "Bash(openspec:*)", "Bash(python -m pytest:*)", "Bash(git status:*)",
@@ -129,6 +146,8 @@ def main(argv=None) -> int:
     run(["ho", "init", str(hub), "--teams", ",".join(f"{k}={v}" for k, v in TEAMS.items())])
     git_repo(hub)
     tech = team_repo(root, hub, "app", TECH_CLAUDE, {"greet.py": GREET, "test_greet.py": TEST_GREET})
+    plain = team_repo(root, hub, "backend", PLAIN_CLAUDE, {"greet.py": GREET, "test_greet.py": TEST_GREET},
+                      openspec=False)
     prod = team_repo(root, hub, "product", PRODUCT_CLAUDE, {"backlog/BACKLOG.md": BACKLOG})
 
     package_dir = Path(__file__).resolve().parents[1]
@@ -148,6 +167,15 @@ id = "app"
 repo = {toml_str(tech)}
 kind = "technical"
 
+[[teams]]
+id = "backend"
+repo = {toml_str(plain)}
+kind = "technical"
+profile = "plain"      # workflow profile: one work session per handover, no OpenSpec
+
+[workflow]
+profile = "openspec"
+
 [triage]
 team = "product"
 max_per_handover = 3
@@ -162,7 +190,7 @@ session_max_minutes = 30
     machine.mkdir(exist_ok=True)
     (root / "machine-env.ps1").write_text(f"$env:RADARK_MACHINE_DIR = '{machine}'\n", encoding="utf-8")
     (root / "machine-env.sh").write_text(f"export RADARK_MACHINE_DIR='{machine}'\n", encoding="utf-8")
-    print(f"Sandbox ready in {root}\n  hub: {hub}\n  repos: {tech}, {prod}\n"
+    print(f"Sandbox ready in {root}\n  hub: {hub}\n  repos: {tech}, {plain} (plain), {prod}\n"
           f"  machine directory: {machine}\n"
           f"    set it first: . {root / 'machine-env.ps1'}  (PowerShell)  or  . {root / 'machine-env.sh'}  (sh)\n"
           f"  run: python -m radark --config {root / 'harness.toml'} dry-run   (from {package_dir.parent})")
