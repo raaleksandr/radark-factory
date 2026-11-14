@@ -92,7 +92,7 @@ propose).
 
 - [x] 7.1 Commit locally (no push, tag, release or reinstall) with messages citing HO-20261114-wwqw; verify
   `git status` is clean.
-- [ ] 7.2 `ho done HO-20261114-wwqw -m "..."` listing: the change name (`parallel-sessions`) and radark-handover's
+- [x] 7.2 `ho done HO-20261114-wwqw -m "..."` listing: the change name (`parallel-sessions`) and radark-handover's
   change name; commits in both repositories (radark-handover's from its `ho done`); test counts of both suites; the
   new setting `[loop] parallel_sessions` (default 1); the environment variable `HARNESS_PARALLEL_SESSIONS`; the
   exact parallel prompt note and the work-in-progress text; the `ho` version / signal required for N > 1; every
