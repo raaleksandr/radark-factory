@@ -60,6 +60,10 @@ radark --config D:\work\my-factory\harness.toml run
 (same output and exit code, plus one note on standard error), kept for at least one release.
 
 Keep the configuration and run directory of each pipeline in its own folder, outside this repository.
+Several pipelines may run on one computer at once: they share one machine-wide usage record, a cap on concurrent
+sessions and full test runs (`machine.toml`, see [machine.toml.example](machine.toml.example)), and each team
+repository belongs to one running pipeline; `radark status` shows them (see "Several pipelines on one computer" in
+[radark/README.md](radark/README.md)).
 Full documentation: [radark/README.md](radark/README.md). Design: [openspec/specs](openspec/specs),
 decision record: [docs/decisions](docs/decisions), background research: [docs/research](docs/research).
 

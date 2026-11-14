@@ -1,0 +1,13 @@
+# Machine limits shared by every radark pipeline of this OS user on this computer (change machine-wide-instances).
+#
+# Copy to machine.toml in the machine directory:
+#   Windows:    %LOCALAPPDATA%\radark\machine\machine.toml
+#   elsewhere:  ${XDG_STATE_HOME:-~/.local/state}/radark/machine/machine.toml
+#   or the directory named by RADARK_MACHINE_DIR, when set.
+# `python -m radark status` prints the directory in use. Without the file the defaults below apply.
+# Each value is an integer of at least 1; a wrong value makes run / once / dry-run exit with code 2.
+# A change applies to running pipelines at their next slot request.
+
+[machine]
+sessions = 2     # Claude Code sessions running at once over all pipelines (work sessions, idle asks, goal checks)
+test_runs = 1    # full test suites run at once through `radark-test-slot <command>`

@@ -61,7 +61,9 @@ idle_reask_minutes = 60        # repeat that ask after this many awake minutes w
 # keep_awake = "on"              # on (default: whole run) | off (let the computer sleep) | HH:MM-HH:MM (daily range,
                                # may cross midnight); --keep-awake overrides
 parallel_sessions = 1          # sessions at once, at most one per repository and handover; above 1 needs an ho
-                               # with the hub lock ("hub-lock" in `ho --version --json`); 1 = one at a time
+                               # with the hub lock ("hub-lock" in `ho --version --json`); 1 = one at a time;
+                               # all pipelines on this computer together are capped by machine.toml (sessions = 2,
+                               # see machine.toml.example)
 
 [goal]                         # limits of a goal run (run --goal <file>); --max-sessions / --max-hours override
 max_sessions = 40              # every session counts: work, triage consultation, goal check

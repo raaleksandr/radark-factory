@@ -1,4 +1,5 @@
-"""CLI and loop: python -m radark [--config harness.toml] run|once|dry-run|plan|escalations|clear|keep|note."""
+"""CLI and loop: python -m radark [--config harness.toml]
+run|once|dry-run|plan|status|test-slot|escalations|clear|keep|note."""
 from __future__ import annotations
 
 import argparse
@@ -19,6 +20,7 @@ from pathlib import Path
 
 from . import config as config_mod
 from . import forecast
+from . import machine as machine_mod
 from . import prompts
 from . import select as sel
 from .awake import FORMS as KEEP_AWAKE_FORMS, KeepAwake, Keeper, cover_end_time, parse_keep_awake, wanted
@@ -193,6 +195,8 @@ class Dispatcher:
         # idle re-ask by awake time (goal-ends-with-run D4): awake reading at the end of the last session or at start
         self._idle_mark = self.awake_now()
         self._idle_retry = False  # an interrupted idle ask runs again when the loop is idle (sleep-aware D6)
+        self.machine: machine_mod.Machine | None = None  # the machine layer; set by main (machine-wide-instances)
+        self._machine_wait: tuple[int, int, int] | None = None  # (own, other, limit) of the machine wait printed
 
     # ---- per-worker context (parallel-sessions D1)
 
@@ -362,7 +366,10 @@ class Dispatcher:
 
     def parallel_note(self) -> str:
         """The parallel note of a work prompt when more than one session may run (parallel-sessions D7)."""
-        return "\n\n" + prompts.PARALLEL_NOTE if self.cfg.parallel_sessions > 1 else ""
+        note = "\n\n" + prompts.PARALLEL_NOTE if self.cfg.parallel_sessions > 1 else ""
+        if self.cfg.parallel_sessions > 1 or (self.machine is not None and self.machine.others_running()):
+            note += "\n\n" + prompts.TEST_SLOT_NOTE  # machine-wide-instances D8
+        return note
 
     def _worker(self, cand: sel.Candidate) -> str:
         rec = self.state.get(cand.handover)
@@ -592,12 +599,13 @@ class Dispatcher:
     def start_backoff(self, r: SessionResult | None = None) -> None:
         """Wait for the exhausted window's reported reset; the doubling back-off only when none is known (design D4)."""
         now = time.time()
-        found = exhausted_window(r.usage if r else {}, now) or exhausted_window(self.state.meta.get("usage"), now)
+        found = exhausted_window(r.usage if r else {}, now) or exhausted_window(self.effective_usage(), now)
         if found:
             window, w = found
             self.log.write("usage_limit", window=window, resets_at=w["resets_at"])
             self.wait_for_reset(window, w, "limit_hit")
             self.state.save()
+            self.share_hold(w["resets_at"] + USAGE_MARGIN_S, window)
             return
         minutes = self.state.meta.get("backoff_minutes")
         minutes = self.cfg.usage_backoff_minutes if not minutes else min(minutes * 2, self.cfg.usage_backoff_max_minutes)
@@ -606,6 +614,7 @@ class Dispatcher:
         self.log.write("usage_limit", backoff_minutes=minutes)
         self.problem(f"Usage limit reached; no new session for {minutes} min.")
         self.state.save()
+        self.share_hold(self.state.meta["backoff_until"], None)
 
     def escalate(self, handover: str, team: str, reason: str, stalled: bool = False, *, session: str | None = None,
                  phase: str | None = None, question=None, result_tail: str = "", title: str | None = None,
@@ -1515,13 +1524,17 @@ class Dispatcher:
 
     def usage_watch(self, team: str, handover: str | None):
         """Runner callback: announce once per session per window when a reading reaches the threshold (design D6)."""
-        crossed = set()
+        crossed, shared = set(), {}
 
         def on_usage(window: str, utilization: float, resets_at: float | None) -> None:
             with self.lock:  # from the stream thread (parallel-sessions D9)
                 reading(window, utilization, resets_at)
 
         def reading(window: str, utilization: float, resets_at: float | None) -> None:
+            if self.machine is not None and shared.get(window) != (utilization, resets_at):  # machine-wide D3
+                shared[window] = (utilization, resets_at)
+                self.machine.merge_usage({window: {"utilization": utilization, "resets_at": resets_at,
+                                                   "status": None}})
             budget = self.budget.get(window)
             if window in crossed or percent(utilization) < (budget or self.cfg.usage_pause_percent):
                 return
@@ -1545,20 +1558,77 @@ class Dispatcher:
         for window, reading in r.usage.items():
             usage[window] = {**reading, "seen": seen}
         self.state.save()
+        if self.machine is not None:  # with its status, which the stream callback does not carry (machine-wide D3)
+            self.machine.merge_usage(r.usage)
+
+    def effective_usage(self) -> dict:
+        """Per window the newest reading of this instance's own record and the machine-wide one (machine-wide D3)."""
+        own = self.state.meta.get("usage") or {}
+        if self.machine is None:
+            return own
+        shared = (self.machine.read_usage() or {}).get("windows")
+        if not isinstance(shared, dict) or not shared:
+            return own
+        out = {}
+        for window in dict.fromkeys([*own, *shared]):
+            mine, other = own.get(window), shared.get(window)
+            if not isinstance(other, dict):
+                out[window] = mine
+                continue
+            theirs = {"utilization": other.get("utilization"), "resets_at": other.get("resets_at"),
+                      "status": other.get("status"), "seen_ts": other.get("seen_ts")}
+            try:
+                mine_at = iso_ts(mine["seen"]) if isinstance(mine, dict) else None
+            except (KeyError, TypeError, ValueError):
+                mine_at = None
+            out[window] = mine if mine_at is not None and mine_at >= (other.get("seen_ts") or 0) else theirs
+        return out
 
     def usage_hold(self) -> None:
-        """Hold new steps while a window that has not reset is at or above the threshold (design D3, D5)."""
-        held = held_windows(self.state.meta.get("usage"), self.cfg.usage_pause_percent, time.time(), set(self.budget))
+        """Hold new steps while a window that has not reset is at or above the threshold (design D3, D5), and while
+        another pipeline's usage-limit hold lasts (machine-wide D3)."""
+        held = held_windows(self.effective_usage(), self.cfg.usage_pause_percent, time.time(), set(self.budget))
         if held:
             window, w = max(held, key=lambda x: x[1]["resets_at"])
             self.wait_for_reset(window, w, "threshold")
+        self.shared_hold()
+
+    def shared_hold(self) -> None:
+        """Wait out another pipeline's usage-limit hold, without doubling this instance's own back-off."""
+        if self.machine is None:
+            return
+        hold = (self.machine.read_usage() or {}).get("hold")
+        if not isinstance(hold, dict) or hold.get("by") == self.machine.id:
+            return
+        until, now, meta = hold.get("until"), time.time(), self.state.meta
+        if not isinstance(until, (int, float)) or until <= now or until <= meta.get("backoff_until", 0):
+            return
+        window = hold.get("window")
+        minutes = max(0, math.ceil((until - now) / 60))
+        meta["backoff_until"] = until
+        meta["usage_wait"] = {"until": until, "window": window, "utilization": None, "cause": "other_pipeline"}
+        self.log.write("usage_wait", window=window, until=until, minutes=minutes, cause="other_pipeline")
+        self.state.save()
+        if self._usage_announced != (window, until):
+            self._usage_announced = (window, until)
+            self._usage_note = now
+            if window:
+                self.problem(f"Usage limit hit: {window} resets {clock(until - USAGE_MARGIN_S)} (local), waiting "
+                             f"{minutes} min (hit in another pipeline).")
+            else:
+                self.problem(f"Usage limit reached; no new session for {minutes} min (hit in another pipeline).")
+
+    def share_hold(self, until: float, window: str | None) -> None:
+        """Write this instance's usage-limit wait as the machine-wide hold (machine-wide D3)."""
+        if self.machine is not None:
+            self.machine.write_hold(until, window)
 
     def start_budget(self) -> None:
         """Console lines and log records for the run's usage budget, with a warning above the threshold (design D5)."""
         if not self.budget:
             return
         threshold = self.cfg.usage_pause_percent
-        live = dict(live_windows(self.state.meta.get("usage"), time.time()))
+        live = dict(live_windows(self.effective_usage(), time.time()))
         self.log.write("usage_budget", budget=self.budget, threshold=threshold)
         for window, budget in self.budget.items():
             now = percent_text(live[window].get("utilization")) if window in live else "no current reading"
@@ -1570,7 +1640,7 @@ class Dispatcher:
 
     def budget_end(self) -> int | None:
         """End the run when a budgeted window reached its budget (design D4); None to go on."""
-        found = budget_reached(self.state.meta.get("usage"), self.budget, time.time())
+        found = budget_reached(self.effective_usage(), self.budget, time.time()) if self.budget else None
         if not found:
             return None
         window, w = found
@@ -1666,7 +1736,8 @@ class Dispatcher:
         w = self.state.meta.get("usage_wait")
         if w and time.time() - self._usage_note >= USAGE_REMINDER_S:
             self._usage_note = time.time()
-            self.problem(f"still waiting for the {w['window']} usage window to reset "
+            what = f"the {w['window']} usage window to reset" if w.get("window") else "the usage-limit wait to end"
+            self.problem(f"still waiting for {what} "
                          f"(resumes {clock(time.time() + wait)}, {math.ceil(wait / 60)} min left).")
 
     def usage_resumed(self) -> None:
@@ -1674,8 +1745,50 @@ class Dispatcher:
         if w:
             self._usage_announced = None
             self.log.write("usage_resume", window=w.get("window"), cause=w.get("cause"))
-            self.out(f"{stamp()}  Usage window {w.get('window')} has reset; resuming.")
+            self.out(f"{stamp()}  " + (f"Usage window {w.get('window')} has reset; resuming." if w.get("window")
+                                       else "Usage-limit wait has ended; resuming."))
             self.state.save()
+
+    # ---- machine layer (machine-wide-instances)
+
+    def machine_report(self, event: str, text: str, **fields) -> None:
+        """A one-off problem of the machine layer: run-log event and one `!` line."""
+        with self.lock:
+            self.log.write(event, **fields)
+            self.problem(text)
+
+    def machine_slot(self, kind: str = "session"):
+        """A machine session slot for the next step (design D7): its number; True without a machine layer; None
+        when none is free (one console line and a `machine_wait` event when the waiting starts or its numbers
+        change)."""
+        if self.machine is None:
+            return True
+        n = self.machine.try_session_slot(kind)
+        if n is None:
+            own, other, limit = self.machine.session_counts()
+            if self._machine_wait != (own, other, limit):
+                self._machine_wait = (own, other, limit)
+                self.log.write("machine_wait", limit=limit, own=own, other=other)
+                if own:
+                    text = (f"machine limit: {own + other} sessions running ({own} in this pipeline, {other} in other "
+                            "pipelines)")
+                else:
+                    text = f"machine limit: {other} session{'' if other == 1 else 's'} running in other pipelines"
+                self.out(f"{stamp()}  {text}")
+            return None
+        if self._machine_wait is not None:
+            self._machine_wait = None
+            self.log.write("machine_wait_end", slot=n)
+            self.out(f"{stamp()}  machine slot free - starting")
+        return n
+
+    def release_slot(self, slot) -> None:
+        if self.machine is not None and isinstance(slot, int) and not isinstance(slot, bool):
+            self.machine.release_session_slot(slot)
+
+    def machine_nap_s(self) -> float:
+        """The nap while waiting for a machine slot: the poll interval, at least 1 s and at most 30 s."""
+        return min(max(float(self.cfg.poll_seconds), 1.0), 30.0)
 
     # ---- loop (design D7)
 
@@ -1692,8 +1805,17 @@ class Dispatcher:
         """Repositories and handovers with a running worker."""
         return ({w.repo for w in self.workers if w.repo}, {w.handover for w in self.workers if w.handover})
 
-    def start_work(self, kind: str, team: str, handover: str | None, fn, *args) -> Work:
-        """Start a worker thread that runs `fn(*args)` to its end with its own runner (D1)."""
+    def launch(self, kind: str, team: str, handover: str | None, fn, *args) -> None:
+        """Start a worker once a machine session slot is taken; else wait for one (machine-wide D7)."""
+        slot = self.machine_slot()
+        if slot is None:
+            self.wait_workers(self.machine_nap_s())
+            return
+        self.start_work(kind, team, handover, fn, *args, slot=slot)
+
+    def start_work(self, kind: str, team: str, handover: str | None, fn, *args, slot=None) -> Work:
+        """Start a worker thread that runs `fn(*args)` to its end with its own runner (D1); `slot`, the machine
+        session slot it holds, is released after the step has been processed."""
         runner = self.runners.get(team)
         if runner is None:
             runner = self.runners[team] = self.runner_factory(self.cfg)
@@ -1709,7 +1831,10 @@ class Dispatcher:
                 work.error = exc
             finally:
                 with self.lock:
-                    work.done = True
+                    try:
+                        self.release_slot(slot)
+                    finally:
+                        work.done = True
                 self._wake.set()
 
         work.thread = threading.Thread(target=body, name=f"radark-{team}", daemon=True)
@@ -1759,7 +1884,7 @@ class Dispatcher:
             return limit
         if self.until is not None and time.time() >= self.until:
             return "end time reached"
-        if budget_reached(self.state.meta.get("usage"), self.budget, time.time()):
+        if self.budget and budget_reached(self.effective_usage(), self.budget, time.time()):
             return "usage budget reached"
         if self._fatal is not None or self._error is not None:
             return "stopping after an error"
@@ -1860,26 +1985,26 @@ class Dispatcher:
             product_free = product is not None and self.repo_key(product) not in repos
             if self.goal and self.goal.pending:  # changed guidance: a goal check before anything else
                 if product_free:
-                    self.start_work("goal", product, None, self.goal_check)
+                    self.launch("goal", product, None, self.goal_check)
                 else:
                     self.wait_workers(idle_wait)
                 continue
             answers = [a for a in self.owner_answers()
                        if a[0] not in handovers and self.repo_key(a[1]["team"]) not in repos]
             if answers:
-                self.start_work("answer", answers[0][1]["team"], answers[0][0], self.resume_with_answer, *answers[0])
+                self.launch("answer", answers[0][1]["team"], answers[0][0], self.resume_with_answer, *answers[0])
                 continue
             cands = self.plan(held)
             cand = sel.pick_free(cands, repos, handovers, {t.id: self.repo_key(t.id) for t in self.cfg.teams})
             if cand is not None:
-                self.start_work("work", cand.team, cand.handover, self.run_candidate, cand)
+                self.launch("work", cand.team, cand.handover, self.run_candidate, cand)
                 continue
             if product_free and self.goal:
                 if not self.workers or self._goal_wait_hub != self.hub_latest():
-                    self.start_work("goal", product, None, self.goal_check)
+                    self.launch("goal", product, None, self.goal_check)
                     continue
             elif product_free and self.cfg.idle_ask and (cause := self.idle_due()):
-                self.start_work("idle", product, None, self.idle_ask, cause)
+                self.launch("idle", product, None, self.idle_ask, cause)
                 continue
             if not self.workers:
                 if once:
@@ -1935,24 +2060,32 @@ class Dispatcher:
             guidance = bool(self.goal and self.goal.pending)  # changed guidance: a goal check before anything else
             answers = [] if guidance else self.owner_answers()  # an owner's answer goes before new candidates
             cand = None if answers or guidance else sel.pick(self.plan(held))
-            if not answers and cand is None:
-                if self.goal:  # a goal run never polls an idle hub (goal-run design G3)
-                    end = self.goal_check()
-                    if end:
-                        return self.end_goal(*end)
-                    if self.stop_after_session:
-                        return self.end_goal("stopped", "interrupted (Ctrl+C)")
+            cause = None
+            if not answers and cand is None and not self.goal:
+                cause = self.idle_due() if self.cfg.idle_ask and self.product_team() is not None else None
+                if cause is None:
+                    if once:
+                        self.out("Nothing to do.")
+                        return 0
+                    self.nap(self.cfg.poll_seconds)
                     continue
-                if self.cfg.idle_ask and self.idle_ask():
+            slot = self.machine_slot()  # before every step that runs a session (machine-wide D7)
+            if slot is None:
+                self.nap(self.machine_nap_s())
+                continue
+            try:
+                if not answers and cand is None:
+                    if self.goal:  # a goal run never polls an idle hub (goal-run design G3)
+                        end = self.goal_check()
+                        if end:
+                            return self.end_goal(*end)
+                        if self.stop_after_session:
+                            return self.end_goal("stopped", "interrupted (Ctrl+C)")
+                        continue
+                    self.idle_ask(cause)
                     if once or self.stop_after_session:
                         return 0
                     continue
-                if once:
-                    self.out("Nothing to do.")
-                    return 0
-                self.nap(self.cfg.poll_seconds)
-                continue
-            try:
                 if answers:
                     self.resume_with_answer(*answers[0])
                 else:
@@ -1961,6 +2094,8 @@ class Dispatcher:
                 self.log.write("hooks_not_loaded", detail=str(exc))
                 self.problem(f"hooks not loaded: {exc}. Stopping: check the hook setup (radark/README.md).")
                 return 3
+            finally:
+                self.release_slot(slot)
             if self.goal and self.stop_after_session:
                 return self.end_goal("stopped", "interrupted (Ctrl+C)")
             if once or self.stop_after_session:
@@ -2216,7 +2351,7 @@ def exhausted_window(usage: dict | None, now: float) -> tuple[str, dict] | None:
 
 def usage_report(d: Dispatcher) -> list[str]:
     """The stored reading per window and the guard's verdict, for dry-run and a held --once (design D6)."""
-    usage, now = d.state.meta.get("usage") or {}, time.time()
+    usage, now = d.effective_usage() or {}, time.time()
     lines = []
     for name, w in usage.items():
         reset = w.get("resets_at")
@@ -2507,7 +2642,97 @@ def find_change(repo: Path, handover: str) -> str | None:
 
 # -- CLI --------------------------------------------------------------------------------
 
+def machine_lines(m: machine_mod.Machine) -> list[str]:
+    """`Machine: <dir> - limits ...` and one line per other running pipeline (machine-wide D9); another instance's
+    details are only its configuration path and running sessions."""
+    lines = [f"Machine: {m.dir} - limits {m.limits().text()}"]
+    for rec in m.instances():
+        n = rec.get("sessions") or 0
+        lines.append(f"Other pipeline running: {rec.get('config') or '(configuration unknown)'} "
+                     f"({n} session{'' if n == 1 else 's'} running)")
+    return lines
+
+
+def repos_of(cfg: config_mod.Config) -> list[Path]:
+    return [Path(t.repo) for t in cfg.teams]
+
+
+def machine_dry_run(d: Dispatcher) -> list[str]:
+    """The machine lines of `dry-run`: limits, other pipelines, repository conflicts, machine slot (design D9)."""
+    m = d.machine
+    lines = machine_lines(m)
+    for repo, holder in m.repo_conflicts(repos_of(d.cfg)):
+        lines.append(f"! repository {repo} is in use by another running pipeline "
+                     f"({holder.get('config') or 'configuration unknown'}); run would refuse")
+    other, limit = m.held("session"), m.limits().sessions
+    lines.append("Machine slot: free" if other < limit else
+                 f"Machine slot: none free ({other} running in other pipelines) - would wait")
+    return lines
+
+
+def status(config_path: str) -> int:
+    """`status`: read-only view of the machine layer (design D9); takes no lock of its own."""
+    directory = machine_mod.machine_dir()
+    print(f"Machine directory: {directory}")
+    error = None
+    try:
+        limits = machine_mod.load_limits(directory)
+        print(f"Limits: {limits.text()}")
+    except machine_mod.MachineError as exc:
+        error, limits = exc, machine_mod.Limits()
+        print(f"Limits: error: {exc}")
+    try:
+        cfg = config_mod.load(config_path)
+    except config_mod.ConfigError as exc:
+        cfg = None
+        print(f"Configuration {config_path} not read ({exc}); repository conflicts are not checked.")
+    if not directory.is_dir():
+        print("No pipeline has used this machine directory yet.")
+        return 2 if error else 0
+    m = machine_mod.Machine(directory, cfg.path if cfg else None, strict=False,  # a view: it claims nothing
+                            report=lambda event, text, **fields: print(f"! {text}"))
+    others = m.instances()
+    if others:
+        print("Running pipelines:")
+        for rec in others:
+            n = rec.get("sessions") or 0
+            print(f"  {rec.get('config') or '(configuration unknown)'} (PID {rec.get('pid')}, started "
+                  f"{rec.get('started')}, {n} session{'' if n == 1 else 's'} running)")
+    else:
+        print("Running pipelines: none")
+    print(f"Session slots in use: {m.held('session')}/{limits.sessions}")
+    print(f"Test-run slots in use: {m.held('test')}/{limits.test_runs}")
+    usage = m.read_usage() or {}
+    windows, now = usage.get("windows") if isinstance(usage.get("windows"), dict) else {}, time.time()
+    for name, w in windows.items():
+        reset, seen = w.get("resets_at"), w.get("seen_ts")
+        seen_text = f" (seen {stamp(seen)})" if isinstance(seen, (int, float)) else ""
+        if isinstance(reset, (int, float)) and reset <= now:
+            print(f"Usage: {name} has reset at {clock(reset)} (counts as unused){seen_text}")
+            continue
+        print(f"Usage: {name} {percent_text(w.get('utilization'))} "
+              + (f"resets {clock(reset)}" if isinstance(reset, (int, float)) else "reset time unknown")
+              + (f", status {w['status']}" if w.get("status") not in (None, "allowed") else "") + seen_text)
+    if not windows:
+        print("Usage: no shared reading yet")
+    hold = usage.get("hold")
+    if isinstance(hold, dict) and isinstance(hold.get("until"), (int, float)) and hold["until"] > now:
+        print(f"Usage hold: no new session until {clock(hold['until'])} (usage limit hit"
+              + (f", {hold['window']}" if hold.get("window") else "") + f" in {hold.get('config') or 'a pipeline'})")
+    if cfg is not None:
+        conflicts = m.repo_conflicts(repos_of(cfg))
+        for repo, holder in conflicts:
+            print(f"! repository {repo} is in use by another running pipeline "
+                  f"({holder.get('config') or 'configuration unknown'})")
+        if not conflicts:
+            print(f"Repository conflicts of {cfg.path}: none")
+    return 2 if error else 0
+
+
 def dry_run(d: Dispatcher) -> int:
+    if d.machine is not None:
+        for line in machine_dry_run(d):
+            print(line)
     for line in usage_report(d):
         print(line)
     if d.until is not None:
@@ -2674,7 +2899,22 @@ def plan_run(d: Dispatcher, steps: int, goal: GoalRun | None, max_sessions: int 
     return 0
 
 
+def slot_command(argv: list[str]) -> list[str] | None:
+    """The command after `test-slot` (after an optional `--config X`), None for another command; read before
+    argparse, so the command's own options stay its own."""
+    i = 0
+    while i < len(argv) and argv[i].startswith("--config"):
+        i += 1 if "=" in argv[i] else 2
+    return argv[i + 1:] if i < len(argv) and argv[i] == "test-slot" else None
+
+
 def main(argv=None) -> int:
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if (cmd := slot_command(raw)) is not None:  # machine-wide-instances D8
+        try:
+            return machine_mod.run_test_slot(cmd)
+        except KeyboardInterrupt:
+            return 130
     p = argparse.ArgumentParser(prog="python -m radark", description=__doc__)
     p.add_argument("--config", default="harness.toml")
     sub = p.add_subparsers(dest="command", required=True)
@@ -2703,6 +2943,10 @@ def main(argv=None) -> int:
     pl.add_argument("--goal", metavar="FILE", help="predict a goal run on FILE (goal check instead of idle)")
     pl.add_argument("--max-sessions", type=int, metavar="N", help="goal run: mark where this session limit ends the run "
                                                       "(default [goal] max_sessions)")
+    sub.add_parser("status", help="machine directory, limits, other running pipelines, slots, shared usage, "
+                                  "repository conflicts; read-only")
+    sub.add_parser("test-slot", help="test-slot [--] <command...>: run a full test suite holding a machine test-run "
+                                     "slot; exits with the command's exit code")
     sub.add_parser("escalations", help="list escalated and stalled items")
     c = sub.add_parser("clear", help="make an escalated or stalled item selectable again")
     c.add_argument("id")
@@ -2728,6 +2972,8 @@ def main(argv=None) -> int:
             print(f"{flag} must be an integer from 1 to 100, not {value}.", file=sys.stderr)
             return 2
         budget[window] = value
+    if args.command == "status":  # needs no readable configuration, no `ho` and no lock (machine-wide D9)
+        return status(args.config)
     until = None
     if getattr(args, "until", None) is not None:
         at = parse_until(args.until, dt.datetime.now())
@@ -2824,6 +3070,12 @@ def main(argv=None) -> int:
             return 1
     dry = args.command == "dry-run" or (args.command == "run" and args.dry_run)
     once = args.command == "once" or (args.command == "run" and args.once)
+    try:  # machine directory and limits before the run lock (machine-wide D1, D2, D5)
+        directory = machine_mod.prepare_dir(machine_mod.machine_dir(), cfg.run_dir, repos_of(cfg))
+        d.machine = machine_mod.Machine(directory, cfg.path, cfg.run_dir, report=d.machine_report)
+    except machine_mod.MachineError as exc:
+        print(f"Machine error: {exc}; not starting.", file=sys.stderr)
+        return 2
     print(config_mod.summary(cfg, config_mod.claude_version(cfg), ho.line()))
     try:
         config_mod.check_owner(cfg, d.hub.teams())
@@ -2839,7 +3091,29 @@ def main(argv=None) -> int:
             return dry_run(d)
         lock = Lock(cfg.run_dir / "lock")
         lock.acquire()
+        m = d.machine
         try:
+            m.enter()  # instance record, then the repositories (machine-wide D5, D6)
+            conflict = m.claim_repos(repos_of(cfg))
+        except BaseException:
+            m.close()
+            lock.release()
+            raise
+        if conflict:
+            repo, holder = conflict
+            m.close()
+            lock.release()
+            print(f"Repository {repo} is in use by another running pipeline "
+                  f"({holder.get('config') or 'configuration unknown'}, PID {holder.get('pid') or '?'}); not starting. "
+                  "Remove it from one of the configurations or stop that pipeline.", file=sys.stderr)
+            return 2
+        try:
+            for line in machine_lines(m):
+                print(line)
+            try:
+                machine_mod.write_wrappers(cfg.run_dir)  # radark-test-slot for the sessions (machine-wide D8)
+            except OSError as exc:
+                d.problem(f"the radark-test-slot wrapper could not be written in {cfg.run_dir / 'bin'}: {exc}")
             d.log.write("dispatcher_start", once=once, pid=os.getpid(), goal=str(goal.path) if goal else None)
             d.recover()  # after the lock: the dispatcher that wrote the record is gone
             if goal:
@@ -2850,6 +3124,7 @@ def main(argv=None) -> int:
             code = d.loop(once=once)
         finally:
             d.stop_keep_awake()
+            m.close()
             lock.release()
     except HoError as exc:
         print(f"ho error: {exc}", file=sys.stderr)

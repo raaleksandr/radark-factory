@@ -324,6 +324,13 @@ PARALLEL_NOTE = (  # parallel-sessions D7: work prompts when more than one sessi
 )
 
 
+TEST_SLOT_NOTE = (  # machine-wide-instances D8: work prompts when more than one session can run on the computer
+    "Several sessions may run on this computer now. Run a full test suite as `radark-test-slot <command>` (for "
+    "example `radark-test-slot python -m pytest`); it waits while another session's full test run is in progress, "
+    "then runs your command and returns its exit code. Single quick tests do not need it."
+)
+
+
 def work_in_progress(running: list[dict] | None) -> str:
     """The work-in-progress section of the idle ask and the goal check (parallel-sessions D3); empty when nothing
     else runs. running: [{team, handover, title, phase}]."""

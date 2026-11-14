@@ -98,6 +98,65 @@ A limit check and a triage consultation run next to the session they serve and d
   else can start (<why>)`; `plan` stays a sequential prediction.
 - **Back to one session:** set `parallel_sessions = 1` (or remove it).
 
+### Several pipelines on one computer
+
+Several pipelines (each its own `harness.toml` and run directory, possibly different hubs and `ho` installs; here
+`pipeline-a` and `pipeline-b`) may run at once on one computer under one OS user. They share one Claude account,
+so the dispatcher coordinates them through a **machine directory**: `RADARK_MACHINE_DIR` when set, otherwise
+`%LOCALAPPDATA%\radark\machine` on Windows and `${XDG_STATE_HOME:-~/.local/state}/radark/machine` elsewhere
+(created on first use). It must be writable and lie outside every run directory and team repository; otherwise
+`run`, `once` and `dry-run` exit with code 2 (`Machine error: ...`). Set `RADARK_MACHINE_DIR` to separate pipelines
+on purpose (for example two Claude accounts: they then share nothing); keep it on a local disk (OS file locks on a
+network or synced folder may not work).
+
+- **Machine limits** (`machine.toml` in the machine directory; see `machine.toml.example`): `[machine] sessions`
+  (default 2) caps the Claude Code sessions of all pipelines together, `test_runs` (default 1) the full test runs
+  through `radark-test-slot`. A value that is not an integer of at least 1 is refused at start (exit 2, naming the file
+  and key); a change applies at the next slot request (an invalid one read later keeps the last valid limits, with one
+  `!` line and `machine_config_invalid`).
+- **Session limit:** before a work session, an owner-answer resume, an idle ask or a goal check a pipeline takes a
+  machine session slot besides its own `parallel_sessions` place, and keeps it until the step has been processed
+  (limit checks and triage consultations take none). With no free slot it starts nothing and prints once
+  `machine limit: 2 sessions running in other pipelines` (or `machine limit: 2 sessions running (1 in this pipeline,
+  1 in other pipelines)`), logs `machine_wait`, checks again at least every 30 s (STOP, PAUSE, `--until`, Ctrl+C
+  work as usual; the wait is no stall and no empty goal check; `once` waits too), then prints `machine slot free -
+  starting` and logs `machine_wait_end`. Alone with `parallel_sessions` up to the limit, a pipeline never waits.
+- **Shared usage:** every usage reading of any pipeline's session goes to `usage.json` in the machine directory as
+  soon as it is read; the usage hold, `--budget-5h` / `--budget-7d` (still per run), dry-run and `status` use, per
+  window, the newest reading of the shared record and the pipeline's own. A usage-limit hit in one pipeline holds new
+  starts in all of them until the reset (or the back-off end when no reset is known): `! Usage limit hit: five_hour
+  resets 15:30 (local), waiting 42 min (hit in another pipeline).` Running sessions are not stopped; the other
+  pipeline's own back-off doubling is unchanged. When the shared record stays locked for 10 s the pipeline uses its own
+  reading (one `machine_usage_unavailable` line).
+- **Test-run limit:** `python -m radark test-slot [--] <command> [args...]` (in sessions also `radark-test-slot
+  <command>`, on `PATH` from `<run_dir>/bin`, and `HARNESS_TEST_SLOT`) waits for a free test-run slot, printing
+  `radark-test-slot: waiting - 1 test run in progress on this computer` at once and every minute, runs the command,
+  and exits with its exit code (127 when it cannot start). Inside such a command (`HARNESS_TEST_SLOT_HELD`) a nested
+  call runs at once. The wrapper calls the dispatcher's own Python with `-P`, so the installed release runs, not a
+  `radark` folder of the session's repository. When `parallel_sessions` is above 1 or another pipeline runs, work
+  prompts add: *Several sessions may run on this computer now. Run a full test suite as `radark-test-slot <command>`
+  ...* Teams can make it standing practice with a line in their `CLAUDE.md`: *Run the full test suite as
+  `radark-test-slot <command>` when `HARNESS_TEST_SLOT` is set; single quick tests do not need it.* The wait counts
+  toward the agent's Bash timeout; long suites are best run in the background.
+- **One repository, one pipeline:** `run` / `once` claim every team repository (resolved path; letter case does not
+  matter on Windows; two teams of one configuration may share one). A repository claimed by another running pipeline
+  stops the start (exit 2): `Repository <path> is in use by another running pipeline (<config path>, PID <pid>); not
+  starting. Remove it from one of the configurations or stop that pipeline.` `dry-run` and `status` only show it
+  (`! repository <path> is in use by another running pipeline (<config path>); run would refuse`).
+- **Crash safety:** every claim (pipeline, repository, session slot, test-run slot, usage update) is an OS file lock,
+  released by the OS when the process ends in any way; the JSON records next to the locks are informative only and
+  removed when their lock is free. A killed pipeline never blocks another one.
+- **Keep awake:** each pipeline keeps its own request; Windows keeps the computer awake while any process holds one,
+  so `pipeline-a` ending does not end `pipeline-b`'s request. Sleep watch and wake grace stay per pipeline.
+- **Visibility:** `run` / `once` print `Machine: <dir> - limits 2 sessions, 1 test run` and `Other pipeline running:
+  <config path> (1 session running)` per other pipeline; `dry-run` prints the same, any repository conflict and
+  `Machine slot: free` or `Machine slot: none free (2 running in other pipelines) - would wait`. `python -m radark
+  [--config harness.toml] status` (read-only, not blocked by a running pipeline, `--config` only for the conflict
+  part) prints the machine directory, the limits (exit 2 for an invalid `machine.toml`), the running pipelines
+  (configuration path, PID, start, sessions running), the slots in use, the shared usage and hold, and this
+  configuration's repository conflicts. Of another pipeline only its configuration path, PID, start time and session
+  count are shown.
+
 ## Commands
 
 ```
@@ -110,6 +169,8 @@ python -m radark run --until 07:00                      # this run only: start n
 python -m radark run --keep-awake [WHEN]               # this run only: keep the computer from sleeping on its own (see Keep awake)
 python -m radark run --dry-run | dry-run                # read the hub, print the plan and owner answers; no session, no writes
 python -m radark plan [--steps N] [--goal FILE] [--max-sessions N]   # the next N steps (default 5) if every step succeeds
+python -m radark status                                 # machine directory, limits, other pipelines, slots, shared usage
+python -m radark test-slot [--] <command...>            # run a full test suite holding a machine test-run slot
 python -m radark escalations                            # escalated and stalled items with reasons
 python -m radark clear <ID>                             # make an item selectable again (after you answered it)
 python -m radark keep <ID> [--team <id>] [--off]        # next phases resume the previous session

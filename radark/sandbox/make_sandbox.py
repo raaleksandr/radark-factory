@@ -158,7 +158,13 @@ session_idle_minutes = 20
 session_max_minutes = 30
 """
     (root / "harness.toml").write_text(config, encoding="utf-8")
+    machine = root / "machine"  # a sandbox-local machine directory: never the real one (machine-wide-instances D1)
+    machine.mkdir(exist_ok=True)
+    (root / "machine-env.ps1").write_text(f"$env:RADARK_MACHINE_DIR = '{machine}'\n", encoding="utf-8")
+    (root / "machine-env.sh").write_text(f"export RADARK_MACHINE_DIR='{machine}'\n", encoding="utf-8")
     print(f"Sandbox ready in {root}\n  hub: {hub}\n  repos: {tech}, {prod}\n"
+          f"  machine directory: {machine}\n"
+          f"    set it first: . {root / 'machine-env.ps1'}  (PowerShell)  or  . {root / 'machine-env.sh'}  (sh)\n"
           f"  run: python -m radark --config {root / 'harness.toml'} dry-run   (from {package_dir.parent})")
     return 0
 

@@ -88,6 +88,14 @@ class Env:
         return [json.loads(x) for x in p.read_text().splitlines()] if p.exists() else []
 
 
+@pytest.fixture(autouse=True)
+def machine_home(tmp_path_factory, monkeypatch):
+    """Every test gets its own machine directory, never the real one (machine-wide-instances)."""
+    path = tmp_path_factory.mktemp("machine")
+    monkeypatch.setenv("RADARK_MACHINE_DIR", str(path))
+    return path
+
+
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     return Env(tmp_path, monkeypatch)

@@ -16,6 +16,7 @@ from pathlib import Path
 
 from . import clock
 from .config import Config
+from .machine import machine_dir, wrapper_path
 from .prompts import STANDING_RULE, denial_rule, long_wait_rule
 from .state import now_ts, write_json_atomic
 
@@ -126,7 +127,13 @@ def session_env(base: dict, cfg: Config, team: str, handover: str | None, sessio
         "HARNESS_PHASE": phase,
         "HO_HUB": str(cfg.hub),
         "HO_TEAM": team,
+        # machine-wide-instances D8: the test-run slot wrapper uses this instance's machine directory
+        "RADARK_MACHINE_DIR": os.path.realpath(machine_dir(base)),
+        "HARNESS_TEST_SLOT": str(wrapper_path(cfg.run_dir)),
     })
+    path_key = next((k for k in env if k.upper() == "PATH"), "PATH")
+    bin_dir = str(Path(cfg.run_dir) / "bin")
+    env[path_key] = bin_dir + (os.pathsep + env[path_key] if env.get(path_key) else "")
     if temp_dir is not None:  # fewer-owner-waits D5, D7: hooks see the original temp dirs and the repository
         system = [base[k] for k in TEMP_VARS if base.get(k)]
         env["HARNESS_SYSTEM_TEMP"] = os.pathsep.join(dict.fromkeys(system))
