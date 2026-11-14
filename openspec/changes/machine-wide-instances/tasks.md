@@ -97,7 +97,7 @@ first part; 5–6 the second (design, Assumptions).
 - [x] 7.1 Full suite `python -m pytest radark/tests` passes; failing or flaky tests follow hub `AGENTS.md` §10 (no
   retries or skips to hide a flake). Record the test count under "Apply results".
 - [x] 7.2 Commit locally (no push, tag, release or reinstall), citing HO-20261114-cda3.
-- [ ] 7.3 `ho done HO-20261114-cda3 -m "..."` listing: change name `machine-wide-instances`, commits, new settings
+- [x] 7.3 `ho done HO-20261114-cda3 -m "..."` listing: change name `machine-wide-instances`, commits, new settings
   with defaults (`machine.toml` `sessions = 2`, `test_runs = 1`; `RADARK_MACHINE_DIR`), new commands (`status`,
   `test-slot`), test count, any split or deviation. This is the last step of apply; `ho sync` before and after.
 
