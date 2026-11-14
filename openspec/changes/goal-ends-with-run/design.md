@@ -126,3 +126,17 @@ earlier runs have ended." No other goal-run change.
 
 Older `goal.json` without `ended` works (D2). Older state without the new `meta` keys works (absent = nothing
 escalated, no cleanup done, streak 0). Rollback: `idle_reask_minutes = 0`; the notices are prompt text only.
+
+## Implementation notes (apply, unattended)
+
+- D0: `last_idle_ask` is moved past the hub after every verdict, `did_regular` included; the immediate re-ask comes
+  from `meta.idle_regular_streak` (1 or 2 → due at once), so the behaviour is the one D0 describes. The streak is not
+  reset by the limit: while the last three asks all returned `did_regular`, the next one waits as after `none`.
+- D4: the awake mark comes from the sleep watch's clock (`Dispatcher.awake_now()`), so tests use a fake clock. An
+  interrupted idle ask is due again at once (in-memory retry flag) also when it was due by time or by a regular task.
+  The idle ask log record gains `cause` (`hub | retry | regular | time`) and `blocked`.
+- D1: the no-goal block goes to every fresh phase prompt of the product team (also the fresh prompt that replaces a
+  resume that failed), not only review and act; resumes, limit checks and wrap-ups never carry it.
+- D2: the session that carried the request is logged as `ended_goal_notice` (key, outcome, counted). A work session
+  stopped for a wrap-up is counted by its wrap-up part (D7).
+- D5: the escalated set is the sorted list of `item` texts; it is stored only when the escalation handover was sent.

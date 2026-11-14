@@ -55,7 +55,9 @@ no_progress_limit = 2
 usage_pause_percent = 90       # no new step while a usage window (five_hour / seven_day) is used this much; 100 = off
 usage_backoff_minutes = 30     # fallback wait after a usage-limit hit with no known reset time (doubling)
 usage_backoff_max_minutes = 300
-idle_ask = false
+idle_ask = false               # when no work is left, ask the product team to choose the next work
+idle_reask_minutes = 60        # repeat that ask after this many awake minutes without hub activity; 0 = only on
+                               # hub activity
 # keep_awake = "on"              # on (default: whole run) | off (let the computer sleep) | HH:MM-HH:MM (daily range,
                                # may cross midnight); --keep-awake overrides
 

@@ -64,6 +64,8 @@ class Config:
     usage_backoff_max_minutes: int = 300
     usage_pause_percent: int = 90  # no new step while a window is used at or above this share (usage-limit-guard)
     idle_ask: bool = False
+    idle_reask_minutes: int = 60  # awake minutes without hub activity before the idle ask is repeated; 0: only on
+    # hub activity (goal-ends-with-run D4)
     keep_awake: KeepAwake = KEEP_AWAKE_DEFAULT  # default of `--keep-awake`: off, on or a daily range (keep-awake D2);
     # without `[loop] keep_awake` the whole run (keep-awake-by-default D1)
     owner_team: str = "owner"
@@ -176,6 +178,7 @@ def load(path: str | Path) -> Config:
         usage_backoff_max_minutes=int(loop.get("usage_backoff_max_minutes", 300)),
         usage_pause_percent=loop.get("usage_pause_percent", 90),
         idle_ask=bool(loop.get("idle_ask", False)),
+        idle_reask_minutes=loop.get("idle_reask_minutes", 60),
         keep_awake=_keep_awake(loop["keep_awake"]) if "keep_awake" in loop else KEEP_AWAKE_DEFAULT,
         owner_team=str(data.get("owner_team", "owner")),
         goal_max_sessions=int(goal.get("max_sessions", 40)),
@@ -192,6 +195,9 @@ def load(path: str | Path) -> Config:
         raise ConfigError(f"loop.limit_checks must be an integer of 0 or more, not {n!r}")
     if cfg.wrap_up_minutes < 0:
         raise ConfigError("loop.wrap_up_minutes must be 0 or more (0 turns the wrap-up off)")
+    m = cfg.idle_reask_minutes
+    if isinstance(m, bool) or not isinstance(m, int) or m < 0:
+        raise ConfigError(f"loop.idle_reask_minutes must be an integer of 0 or more (0: only on hub activity), not {m!r}")
     if cfg.wake_grace_minutes <= 0:
         raise ConfigError("loop.wake_grace_minutes must be positive")
     if cfg.goal_max_sessions <= 0 or cfg.goal_max_hours <= 0:

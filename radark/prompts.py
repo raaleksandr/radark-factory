@@ -1,6 +1,7 @@
 """Phase prompts (spec: Phase prompts) and the messages used around product triage."""
 from __future__ import annotations
 
+import datetime as dt
 import json
 import math
 import re
@@ -111,14 +112,45 @@ def goal_block(goal: str) -> str:
             + _quote(goal))
 
 
-def _with_rule(text: str, goal: str | None) -> str:
-    return text + "\n\n" + (goal_block(goal) + "\n\n" if goal else "") + STANDING_RULE
+def _with_rule(text: str, goal: str | None, no_goal: str | None = None) -> str:
+    """`no_goal`: the no-goal block (goal-ends-with-run D1), given in place of the goal block in a run without one."""
+    block = goal_block(goal) if goal else no_goal
+    return text + "\n\n" + (block + "\n\n" if block else "") + STANDING_RULE
+
+
+# product-team prompts of a run without a goal (goal-ends-with-run D1)
+NO_GOAL_NOTICE = (
+    "No owner goal is active in this run. Goals of earlier runs have ended and set no order of work; choose the next "
+    "task by your team's usual task-choice rule."
+)
+
+
+def _local_time(iso: str | None) -> str | None:
+    """`17:00, 2026-11-13` from a local ISO time; None when missing or unreadable."""
+    try:
+        at = dt.datetime.fromisoformat(iso) if iso else None
+    except (TypeError, ValueError):
+        return None
+    return f"{at:%H:%M, %Y-%m-%d}" if at else None
+
+
+def ended_goal_notice(path: str, status: str | None, ended: str | None) -> str:
+    """The once-only request after a goal run (goal-ends-with-run D2); `ended` is a local ISO time. A goal run still
+    recorded as `running` ended without a report and has no end time."""
+    if not status or status == "running":
+        head = f"The goal run on `{path}` ended without a report (its end time is unknown)."
+    else:
+        when = _local_time(ended)
+        head = f"The goal run on `{path}` ended (`{status}`" + (f", {when}" if when else "") + ")."
+    return (head + " If your backlog files still record an order of work set by that goal, remove that order now; "
+            "keep its unfinished parts as ordinary backlog items.")
 
 
 def phase_prompt(c: Candidate, goal: str | None = None, denials: list[dict] | None = None,
-                 time_limits: list[dict] | None = None) -> str:
+                 time_limits: list[dict] | None = None, no_goal: str | None = None) -> str:
     """`denials`: the worker's permission denials that were not escalated, named in a review prompt
-    (escalate-denial D3); `time_limits`: the item's sessions wrapped up or cut by a time limit (wrap-up W6.3)."""
+    (escalate-denial D3); `time_limits`: the item's sessions wrapped up or cut by a time limit (wrap-up W6.3);
+    `no_goal`: the no-goal block of a product-team prompt in a run without a goal (goal-ends-with-run D1)."""
     head = f"Handover {c.handover} (\"{c.title}\"). Phase: {c.phase}.\n\n"
     if c.phase == "propose":
         body = (
@@ -170,7 +202,7 @@ def phase_prompt(c: Candidate, goal: str | None = None, denials: list[dict] | No
         )
     else:
         raise ValueError(f"unknown phase {c.phase!r}")
-    return _with_rule(head + body, goal)
+    return _with_rule(head + body, goal, no_goal)
 
 
 def _hours(seconds: float) -> str:
@@ -272,25 +304,51 @@ def timeout_resume_message(c: Candidate, info: dict, index_lock: bool = False, g
     return text + " " + _closing(c)
 
 
-IDLE_PROMPT = (
-    _HUB + "The other teams have no work waiting. Look at the backlog: is there a task that a technical "
-    "team can do fully without a human (preferred), or at least partly? If so, hand the best one over "
-    "through the hub as you normally would. If none should be started now, answer \"none\" and change "
-    "nothing.\n\n"
-    "Hand over exactly one backlog item per handover, the smallest useful piece. Bundle items only when "
-    "they are strongly linked (one cannot be done or accepted without the other) or there is a strong "
-    "reason to do them together; then state that reason in the handover. Do not hand over the rest of the "
-    "priority list in the same pass; it will be asked for again once this work moves.\n\n"
-    "Return your verdict: `handed_over` if you handed an item over, otherwise `none`; the reason; and in "
-    "`waiting_for_owner` the backlog items that cannot start before the owner decides something (pricing, "
-    "spending, legal, credentials), each with why. Leave the list empty when nothing waits for the owner.\n\n"
-    + STANDING_RULE
-)
+def blocked_section(blocked: list[dict]) -> str:
+    """Escalated and stalled items named in the idle prompt (goal-ends-with-run D3); empty when there are none."""
+    if not blocked:
+        return ""
+    lines = [f"- {b.get('handover')} (team `{b.get('team')}`, {b.get('kind') or 'escalated'}): "
+             + (" ".join(str(b.get("reason") or "").split()) or "no reason recorded") for b in blocked]
+    return (
+        "These items are escalated to the owner or stalled now:\n" + "\n".join(lines) + "\n"
+        "A blocked item is no reason to leave other ready work waiting: choose ready work that does not depend on "
+        "these items. Answer `none` only when every ready item waits for the owner or depends on a blocked item.\n\n"
+    )
+
+
+def idle_prompt(blocked: list[dict] | None = None, notice: str | None = None) -> str:
+    """The idle ask: the product team's whole choice of the next work (goal-ends-with-run D0, D3); `notice`: the
+    no-goal block of a run without a goal (D1, D2)."""
+    return (
+        _HUB + "The other teams have no work waiting. Choose the next work by your team's usual task-choice rule (the "
+        "rule your team's instructions name), from your backlog, your technical debt and your team's own regular "
+        "tasks (the schedule your team's instructions name) together.\n\n"
+        "A regular task that is overdue or due within a day goes first, in place of a usual task: do it yourself in "
+        "this session (one regular task per ask), record it as your schedule asks, and answer `did_regular`; you will "
+        "be asked again right after it. Otherwise, is there a backlog task that a technical team can do fully without "
+        "a human (preferred), or at least partly? If so, hand the best one over through the hub as you normally "
+        "would. If none should be started now, answer `none` and change nothing.\n\n"
+        + blocked_section(blocked or []) +
+        "Hand over exactly one backlog item per handover, the smallest useful piece. Bundle items only when "
+        "they are strongly linked (one cannot be done or accepted without the other) or there is a strong "
+        "reason to do them together; then state that reason in the handover. Do not hand over the rest of the "
+        "priority list in the same pass; it will be asked for again once this work moves.\n\n"
+        "Return your verdict: `handed_over` if you handed an item over, `did_regular` if you did a regular task "
+        "yourself, otherwise `none`; the reason; and in `waiting_for_owner` the backlog items that cannot start "
+        "before the owner decides something (pricing, spending, legal, credentials), each with why. Leave the list "
+        "empty when nothing waits for the owner.\n\n"
+        + (notice + "\n\n" if notice else "")
+        + STANDING_RULE
+    )
+
+
+IDLE_VERDICTS = ("handed_over", "did_regular", "none")
 
 IDLE_SCHEMA = {
     "type": "object",
     "properties": {
-        "verdict": {"type": "string", "enum": ["handed_over", "none"]},
+        "verdict": {"type": "string", "enum": list(IDLE_VERDICTS)},
         "reason": {"type": "string"},
         "waiting_for_owner": {
             "type": "array",
@@ -319,7 +377,8 @@ VERDICT_SCHEMA = {
 }
 
 
-def consult_prompt(question: dict, team: str, handover: str, change: str | None, goal: str | None = None) -> str:
+def consult_prompt(question: dict, team: str, handover: str, change: str | None, goal: str | None = None,
+                   no_goal: str | None = None) -> str:
     return (
         f"Consultation, not a work session. The `{team}` team, working on handover {handover}"
         f"{f' (OpenSpec change `{change}`)' if change else ''}, has asked this question:\n\n"
@@ -332,7 +391,7 @@ def consult_prompt(question: dict, team: str, handover: str, change: str | None,
         "- `product`: it can; give the answer you choose and the reason;\n"
         "- `owner`: a human must decide (for example pricing, spending money, legal); give the reason.\n\n"
         + CONSULT_POLICY
-    ) + ("\n\n" + goal_block(goal) if goal else "")
+    ) + ("\n\n" + goal_block(goal) if goal else "\n\n" + no_goal if no_goal else "")
 
 
 # consultation (fewer-owner-waits D9): the product team decides what its own policy allows
@@ -454,11 +513,14 @@ def guidance_notice(given: str, current: str) -> str:
     )
 
 
+GOAL_ONLY_THIS_RUN = "Only this run's goal sets the order of work; goals of earlier runs have ended."  # D6
+
+
 def goal_check_prompt(goal: str, notice: str = "") -> str:
     return _with_rule(
         _HUB + "Goal check: the owner started a goal run, and no team has work waiting now.\n\n" + notice
         + "Compare the goal below with the hub (your handovers and their results), the backlog and what the "
-        "teams have finished so far (closed handovers, archived OpenSpec changes). Then:\n"
+        "teams have finished so far (closed handovers, archived OpenSpec changes). " + GOAL_ONLY_THIS_RUN + " Then:\n"
         "- if goal work is left that a team can do without the owner, hand over the next piece through the hub "
         "as you normally would: exactly one backlog item per handover, the smallest useful piece. Bundle items "
         "only when they are strongly linked (one cannot be done or accepted without the other) or there is a "

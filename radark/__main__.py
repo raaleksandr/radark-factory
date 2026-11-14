@@ -21,7 +21,7 @@ from . import forecast
 from . import prompts
 from . import select as sel
 from .awake import FORMS as KEEP_AWAKE_FORMS, KeepAwake, Keeper, cover_end_time, parse_keep_awake, wanted
-from .clock import Sleep, SleepWatch, parse_until
+from .clock import Sleep, SleepWatch, awake, parse_until
 from .hub import Hub, HoError, check_ho
 from .runner import WRAP_UP, Runner, SessionResult, kill_pid_tree
 from .state import GoalRun, RunLog, State, now_ts, read_goal, write_json_atomic
@@ -29,6 +29,7 @@ from .state import GoalRun, RunLog, State, now_ts, read_goal, write_json_atomic
 CONSULT_TOOLS = ["Read", "Grep", "Glob"]
 BUDGET_OPTIONS = {"five_hour": "--budget-5h", "seven_day": "--budget-7d"}  # run usage budget (run-usage-budget D1)
 GOAL_EXIT = {"complete": 0, "stopped": 0, "blocked": 4, "stalled": 5, "limit": 6}  # goal-run design G7
+IDLE_REGULAR_LIMIT = 3  # did_regular verdicts in a row before the idle ask waits as after none (goal-ends-with-run D0)
 GOAL_STALL_LIMIT = 2  # consecutive goal checks without new hub activity end the run (design G4)
 USAGE_MARGIN_S = 60  # after a window's reported reset: covers clock skew against the server (design D3)
 USAGE_REMINDER_S = 3600  # one console reminder per hour during a long usage wait (design D6)
@@ -123,6 +124,14 @@ class Dispatcher:
         self.watch = watch or SleepWatch()
         self._running: dict | None = None  # team, handover, phase of the session now running, for `suspend`
         self.check_runner: Runner | None = None  # the limit check next to a work session (check-session D2)
+        # idle re-ask by awake time (goal-ends-with-run D4): awake reading at the end of the last session or at start
+        self._idle_mark = self.awake_now()
+        self._idle_retry = False  # an interrupted idle ask runs again when the loop is idle (sleep-aware D6)
+        self._cleanup_pending: str | None = None  # key of the ended goal named in the prompt being built (D2)
+
+    def awake_now(self) -> float:
+        """Awake seconds from the sleep watch's clock (a fake one in tests)."""
+        return getattr(self.watch, "clock", awake)()
 
     def get_runner(self) -> Runner:
         if self.runner is None:
@@ -262,6 +271,9 @@ class Dispatcher:
             signal.signal(signal.SIGINT, old)
             self._interrupts = 0
             self._running = None
+            self._idle_mark = self.awake_now()  # quiet awake time for the idle re-ask counts from here (D4)
+        if work:  # a work session ends a run of regular tasks (goal-ends-with-run D0)
+            self.state.meta.pop("idle_regular_streak", None)
         self.record_usage(r)
         for m in r.markers:
             if m.get("event") in ("auto_answer", "escalation", "question", "nudge"):
@@ -286,6 +298,8 @@ class Dispatcher:
                            elapsed_s=r.duration_s, extensions_used=n, grace_min=grace)
             self.problem(f"{what}: time limit after {duration_text(r.duration_s)}, {n} extension"
                          f"{'' if n == 1 else 's'} used; asking the session to wrap up within {grace:g} min")
+        if self._cleanup_pending and not stopped:  # a wrapped-up session counts once its wrap-up ends (D2, D7)
+            self.ended_goal_given(team, r)
         self.log.write("session_end", team=team, handover=handover, phase=phase, session=r.session_id,
                        exit_code=r.exit_code, outcome=r.outcome, duration_s=r.duration_s,
                        auto_answers=len(r.markers_of("auto_answer")), denials=len(r.denials),
@@ -652,11 +666,13 @@ class Dispatcher:
 
     def work_prompt(self, cand: sel.Candidate, rec: dict, goal: str | None) -> str:
         """The phase prompt; a review prompt names the worker's denials that were not escalated, then drops them
-        (escalate-denial D3)."""
+        (escalate-denial D3). A product-team prompt of a run without a goal carries the no-goal block
+        (goal-ends-with-run D1)."""
+        no_goal = None if goal else self.no_goal_for(cand.team)
         if cand.phase == "review":
             return prompts.phase_prompt(cand, goal, denials=rec.pop("unescalated_denials", None),
-                                        time_limits=rec.get("time_limits"))
-        return prompts.phase_prompt(cand, goal)
+                                        time_limits=rec.get("time_limits"), no_goal=no_goal)
+        return prompts.phase_prompt(cand, goal, no_goal=no_goal)
 
     def hub_phase(self, handover: str, rec: dict, since: str) -> None:
         """Move the record's phase on the worker's `done` / `decline` or a return to the worker since `since`."""
@@ -724,8 +740,9 @@ class Dispatcher:
         if rec["triage_count"] > tri.max_per_handover:
             self.escalate(hid, team, f"more than {tri.max_per_handover} product triages for this handover", **owner)
             return None
-        consult = self.session(tri.team, prompts.consult_prompt(question, team, hid, rec.get("change"),
-                                                                self.goal_for(tri.team)),
+        goal = self.goal_for(tri.team)
+        consult = self.session(tri.team, prompts.consult_prompt(question, team, hid, rec.get("change"), goal,
+                                                                None if goal else self.no_goal_for(tri.team)),
                                "consult", hid, tools=CONSULT_TOOLS, json_schema=prompts.VERDICT_SCHEMA,
                                title=rec.get("title") or cand.title)
         if consult.outcome == "interrupted":  # the asking session is resumed and asks again (sleep-aware D4)
@@ -854,23 +871,56 @@ class Dispatcher:
         return self.cfg.triage.team if self.cfg.triage else next(
             (t.id for t in self.cfg.teams if t.kind == "product"), None)
 
+    def idle_reask_left(self) -> float | None:
+        """Awake seconds until the idle ask is due by time (goal-ends-with-run D4); None when off."""
+        minutes = self.cfg.idle_reask_minutes
+        if minutes <= 0:
+            return None
+        return max(0.0, minutes * 60 - (self.awake_now() - self._idle_mark))
+
+    def idle_due(self) -> str | None:
+        """Why an idle ask is due now: `hub` (new activity since the last ask), `retry` (the last one was
+        interrupted), `regular` (the last one did a regular task, fewer than IDLE_REGULAR_LIMIT in a row) or `time`
+        (`idle_reask_minutes` of awake time since the last session); None when it is not due."""
+        latest = self.hub_latest()
+        if not latest or latest > self.state.meta.get("last_idle_ask", ""):
+            return "hub"
+        if self._idle_retry:
+            return "retry"
+        if 0 < int(self.state.meta.get("idle_regular_streak") or 0) < IDLE_REGULAR_LIMIT:
+            return "regular"
+        left = self.idle_reask_left()
+        if left is not None and left <= 0:
+            return "time"
+        return None
+
     def idle_ask(self) -> bool:
         team = self.product_team()
         if team is None:
             return False
-        latest = self.hub_latest()
-        previous = self.state.meta.get("last_idle_ask", "")
-        if latest and latest <= previous:
+        cause = self.idle_due()
+        if cause is None:
             return False
-        self.state.meta["last_idle_ask"] = latest or now_ts()
+        latest, previous = self.hub_latest(), self.state.meta.get("last_idle_ask", "")
+        self._idle_retry = False
+        self.state.meta["last_idle_ask"] = max(latest or now_ts(), previous)
         self.state.save()
-        self.log.write("idle_ask", team=team)
-        r = self.session(team, prompts.IDLE_PROMPT, "idle", None, json_schema=prompts.IDLE_SCHEMA)
+        blocked = self.goal_blocked_items()
+        self.log.write("idle_ask", team=team, cause=cause, blocked=[b["handover"] for b in blocked])
+        prompt = prompts.idle_prompt(blocked, self.no_goal_for(team))
+        r = self.session(team, prompt, "idle", None, json_schema=prompts.IDLE_SCHEMA)
         if r.outcome == "interrupted":  # asked again when due (sleep-aware D6)
             self.state.meta["last_idle_ask"] = previous
+            self._idle_retry = True
             self.state.save()
             return True
         verdict = parse_idle_verdict(r)
+        streak = int(self.state.meta.get("idle_regular_streak") or 0)
+        if verdict is not None and verdict["verdict"] == "did_regular":
+            streak += 1
+            self.state.meta["idle_regular_streak"] = streak
+        else:
+            self.state.meta.pop("idle_regular_streak", None)
         if verdict is None:
             self.log.write("idle_verdict_invalid", team=team, session=r.session_id, outcome=r.outcome,
                            structured=r.structured, result=r.result_text[-1000:])
@@ -878,13 +928,42 @@ class Dispatcher:
         else:
             self.log.write("idle_verdict", team=team, session=r.session_id, **verdict)
             if verdict["verdict"] == "none" and verdict["waiting_for_owner"]:
-                n = len(verdict["waiting_for_owner"])
-                self.send_to_owner(team, f"{team}: {n} backlog item{'s' if n > 1 else ''} wait for the owner",
-                                   prompts.idle_escalation_body(team, verdict), None, "idle: none")
+                self.idle_escalation(team, verdict)
         # the escalation handover above is hub activity too: no new idle ask until something else happens
         self.state.meta["last_idle_ask"] = max(self.hub_latest(), self.state.meta["last_idle_ask"])
+        limit = verdict is not None and verdict["verdict"] == "did_regular" and streak >= IDLE_REGULAR_LIMIT
+        if limit:
+            self.log.write("idle_regular_limit", team=team, streak=streak)
+        left = self.idle_reask_left()
+        at = time.time() + left if left is not None else None
+        if at is not None:
+            self.state.meta["idle_reask_at"] = local_iso(at)
+        else:
+            self.state.meta.pop("idle_reask_at", None)
+        if verdict is not None:
+            if verdict["verdict"] == "did_regular" and not limit:
+                nxt = "next ask now"
+            else:
+                nxt = "next ask on hub activity" + (f" or ~{clock(at)}" if at is not None else "")
+                if limit:
+                    nxt = f"{streak} regular tasks in a row; " + nxt
+            self.out(f"    idle: {verdict['verdict']} - {short_title(verdict['reason'], LINE_WIDTH - 60)}; {nxt}")
         self.state.save()
         return True
+
+    def idle_escalation(self, team: str, verdict: dict) -> None:
+        """One owner escalation per set of owner-waiting items (goal-ends-with-run D5)."""
+        items = sorted(w["item"] for w in verdict["waiting_for_owner"])
+        if items == self.state.meta.get("idle_escalated_items"):
+            self.log.write("idle_escalation_skipped", team=team, items=items)
+            self.out(f"    idle: the same {len(items)} item{'s' if len(items) > 1 else ''} already wait for the "
+                     "owner; no new escalation")
+            return
+        n = len(items)
+        sent = self.send_to_owner(team, f"{team}: {n} backlog item{'s' if n > 1 else ''} wait for the owner",
+                                  prompts.idle_escalation_body(team, verdict), None, "idle: none")
+        if sent:
+            self.state.meta["idle_escalated_items"] = items
 
     def hub_latest(self) -> str:
         times = []
@@ -1090,6 +1169,51 @@ class Dispatcher:
             self.goal_save()
         return self.goal.text
 
+    # ---- a goal binds only its run (goal-ends-with-run D1, D2)
+
+    def no_goal_for(self, team: str) -> str | None:
+        """The no-goal block for a product-team prompt of a run without a goal, None otherwise (D1); while an ended
+        goal run has not had its cleanup request, the block also carries it (D2), and the session that runs this
+        prompt is noted, so its end can count the request as given."""
+        if self.goal is not None or team != self.product_team():
+            return None
+        ended = self.ended_goal()
+        self._cleanup_pending = None
+        if ended is None or ended["key"] == self.state.meta.get("goal_cleanup_done"):
+            return prompts.NO_GOAL_NOTICE
+        self._cleanup_pending = ended["key"]
+        return (prompts.NO_GOAL_NOTICE + "\n\n"
+                + prompts.ended_goal_notice(ended["path"], ended["status"], ended["ended"]))
+
+    def ended_goal(self) -> dict | None:
+        """The goal run recorded in goal.json (path, status, local end time, key = path + start); None when there is
+        none. In a run without a goal it has ended; one still `running` ended without its report (D2)."""
+        try:
+            info = json.loads((self.cfg.run_dir / "goal.json").read_text(encoding="utf-8"))
+            path, started = str(info["path"]), str(info["started"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        status = info.get("status") if isinstance(info.get("status"), str) else "running"
+        ended = info.get("ended") if isinstance(info.get("ended"), str) else None
+        result = info.get("result") if isinstance(info.get("result"), dict) else {}
+        if ended is None and status != "running" and isinstance(result.get("duration_s"), (int, float)):
+            try:  # an older goal.json: start + awake duration + slept time
+                ended = local_iso(iso_ts(started) + result["duration_s"] + (result.get("slept_s") or 0))
+            except ValueError:
+                ended = None
+        return {"path": path, "started": started, "status": status, "ended": None if status == "running" else ended,
+                "key": f"{path}|{started}"}
+
+    def ended_goal_given(self, team: str, r: SessionResult) -> None:
+        """A product session that carried the cleanup request ended: it counts unless it was cut off (D2)."""
+        key, self._cleanup_pending = self._cleanup_pending, None
+        counted = r.outcome not in ("interrupted", "usage_limit")
+        self.log.write("ended_goal_notice", team=team, key=key, session=r.session_id, outcome=r.outcome,
+                       counted=counted)
+        if counted:
+            self.state.meta["goal_cleanup_done"] = key
+            self.state.save()
+
     def goal_refresh(self) -> None:
         """Re-read the goal file between sessions; a change makes the next session a goal check (design G6)."""
         g = self.goal
@@ -1156,7 +1280,7 @@ class Dispatcher:
         """`goal_result` log record, Markdown report in the run directory, console report (design G7)."""
         g = self.goal
         v = g.last_verdict or {}
-        g.status = status
+        g.status, g.ended = status, local_iso(time.time())  # `ended`: for the next run without a goal (D2)
         g.result = {"status": status, "reason": reason, "done": v.get("done", []), "left": v.get("left", []),
                     "escalated": self.goal_blocked_items(), "unescalated_denials": g.unescalated_denials,
                     "handovers": self.goal_handovers(),
@@ -1740,7 +1864,7 @@ def parse_idle_verdict(r: SessionResult) -> dict | None:
             data = json.loads(r.result_text)
         except (TypeError, ValueError):
             return None
-    if not isinstance(data, dict) or data.get("verdict") not in ("handed_over", "none"):
+    if not isinstance(data, dict) or data.get("verdict") not in prompts.IDLE_VERDICTS:
         return None
     waiting = data.get("waiting_for_owner", [])
     if not isinstance(data.get("reason"), str) or not isinstance(waiting, list):
@@ -2018,10 +2142,9 @@ def dry_run(d: Dispatcher) -> int:
             print(f"Goal run: would run a goal check in {d.product_team()} instead of polling.\nPrompt:\n"
                   + prompts.goal_check_prompt(d.goal.text))
             return 0
-        if d.cfg.idle_ask:
-            print("Idle ask is enabled: the product team would be asked for the next backlog task "
-                  f"if the hub has new activity; a verdict `none` with items waiting for the owner would send "
-                  f"one escalation handover to `{owner}`.")
+        if d.cfg.idle_ask and d.product_team():
+            for line in idle_dry_run(d):
+                print(line)
         return 0
     print("Candidates (newest first):")
     for c in cands:
@@ -2032,9 +2155,31 @@ def dry_run(d: Dispatcher) -> int:
           + (f" after its {c.timeout_resume.get('reason')}" if c.timeout_resume else ""))
     lock = (d.cfg.team(c.team).repo / ".git" / "index.lock").is_file()
     goal = d.goal_for(c.team)
+    no_goal = None if goal else d.no_goal_for(c.team)
     print("Prompt:\n" + (prompts.timeout_resume_message(c, c.timeout_resume, lock, goal) if c.timeout_resume
-                         else prompts.phase_prompt(c, goal)))
+                         else prompts.phase_prompt(c, goal, no_goal=no_goal)))
     return 0
+
+
+def idle_dry_run(d: Dispatcher) -> list[str]:
+    """When the next idle ask would come, and its prompt (goal-ends-with-run D4, task 3.9)."""
+    owner, meta, team = d.cfg.owner_team, d.state.meta, d.product_team()
+    latest = d.hub_latest()
+    streak = int(meta.get("idle_regular_streak") or 0)
+    if not latest or latest > meta.get("last_idle_ask", ""):
+        when = "now: the hub has new activity since the last idle ask"
+    elif 0 < streak < IDLE_REGULAR_LIMIT:
+        when = f"now: the last idle ask did a regular task ({streak} in a row)"
+    elif d.cfg.idle_reask_minutes > 0:
+        at = meta.get("idle_reask_at")
+        when = (f"at the next idle re-ask ~{at[11:16]} if the computer stays awake, or on hub activity" if at else
+                f"after {d.cfg.idle_reask_minutes} awake minutes without hub activity, or on hub activity")
+    else:
+        when = "on hub activity only (`idle_reask_minutes = 0`)"
+    return [f"Idle ask is enabled: {team} would be asked for the next work {when}. A verdict `none` with items "
+            f"waiting for the owner would send one escalation handover to `{owner}`, unless the last idle escalation "
+            f"named the same items; `did_regular` asks again at once, at most {IDLE_REGULAR_LIMIT} times in a row.",
+            "Idle prompt:\n" + prompts.idle_prompt(d.goal_blocked_items(), d.no_goal_for(team))]
 
 
 PLAN_ASSUMES = ("Assumes: reviews accept the work; no question escalates or goes to triage; no permission is denied; "

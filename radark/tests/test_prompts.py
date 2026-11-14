@@ -69,7 +69,7 @@ def test_escalation_body_and_title():
                  "ho respond", "ho decline", "claude --resume sess-1", "python -m radark clear HO-1"):
         assert part in body
     assert prompts.escalation_title("backend", "x " * 100).endswith("...")
-    assert "waiting_for_owner" in prompts.IDLE_PROMPT and prompts.IDLE_SCHEMA["required"] == ["verdict", "reason", "waiting_for_owner"]
+    assert "waiting_for_owner" in prompts.idle_prompt() and prompts.IDLE_SCHEMA["required"] == ["verdict", "reason", "waiting_for_owner"]
 
 
 def test_timeout_resume_message():

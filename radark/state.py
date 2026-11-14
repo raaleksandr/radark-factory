@@ -120,6 +120,7 @@ class GoalRun:
     unreadable: bool = False
     status: str = "running"
     result: dict | None = None
+    ended: str | None = None  # local ISO time the run ended (goal-ends-with-run D2)
 
     def __post_init__(self):
         self.given_text = self.given_text or self.text
@@ -136,7 +137,8 @@ class GoalRun:
                 "sessions": self.sessions, "max_sessions": self.max_sessions, "max_hours": self.max_hours,
                 "slept_s": round(self.slept_s),
                 "empty_continues": self.empty_continues, "guidance_pending": self.pending, "given_text": self.given_text,
-                "last_verdict": self.last_verdict, "last_verdict_at": self.verdict_at, "result": self.result, "pid": os.getpid()}
+                "last_verdict": self.last_verdict, "last_verdict_at": self.verdict_at, "result": self.result,
+                **({"ended": self.ended} if self.ended else {}), "pid": os.getpid()}
 
 
 class RunLog:

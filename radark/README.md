@@ -25,7 +25,7 @@ Runtime: Python 3.12, standard library only. Tests: `pytest`. Tested with Claude
 | `[launch]` `permission_mode`, `extra_args` | default `auto`; `bypassPermissions` and `--bare` are refused |
 | `[answers]` `default`, `escalation_keywords` | the "choose the best variant" text; words that send a question to the owner (matched at a word start, case-insensitive, `ё` = `е`; the defaults include Russian stems such as `удал`, `пуш`, `депло`, `оплат`) |
 | `[triage]` `team`, `teams`, `max_per_handover` | product team that answers questions; `teams` limits whose questions are triaged (default: **every** team, the product team included); escalate after N triages per handover |
-| `[loop]` | `poll_seconds` 120, `session_idle_minutes` 20 (no stream event for that long ends the session), `session_max_minutes` 180 (maximum duration; the old `session_timeout_minutes` is accepted as this; both count awake time only; for a work session a checkpoint, see **Limit check**), `limit_check_minutes` 60 (positive: extension when the limit check finds the session progressing), `limit_checks` 3 (integer ≥ 0: limit checks per session, so a healthy work session runs up to 180 + 3 × 60 = 360 min; 0 turns them off), `wrap_up_minutes` 15 (≥ 0: grace period of the wrap-up at a work session's last time limit, see **Wrap-up**; 0 turns the wrap-up off and such a session is cut at its deadline), `wake_grace_minutes` 3 (positive: after the computer wakes, a session with no stream line for that long is ended as `interrupted` and resumed), `no_progress_limit` 2, `usage_pause_percent` 90 (integer 1–100: no new step while a usage window not yet reset is used at least this much; 100 turns the prediction off; `run --budget-5h` / `--budget-7d` replace it per window for one run), `usage_backoff_minutes` 30 (doubling up to `usage_backoff_max_minutes` 300; only when a usage-limit hit has no known reset time), `idle_ask` false, `keep_awake` `"on"` (`"off"`, `"on"` or a daily range `"HH:MM-HH:MM"`: when a run keeps the computer from sleeping on its own; `"off"` lets the computer sleep; not a moment, which applies to one run only; `--keep-awake` replaces it for one run, see **Keep awake**) |
+| `[loop]` | `poll_seconds` 120, `session_idle_minutes` 20 (no stream event for that long ends the session), `session_max_minutes` 180 (maximum duration; the old `session_timeout_minutes` is accepted as this; both count awake time only; for a work session a checkpoint, see **Limit check**), `limit_check_minutes` 60 (positive: extension when the limit check finds the session progressing), `limit_checks` 3 (integer ≥ 0: limit checks per session, so a healthy work session runs up to 180 + 3 × 60 = 360 min; 0 turns them off), `wrap_up_minutes` 15 (≥ 0: grace period of the wrap-up at a work session's last time limit, see **Wrap-up**; 0 turns the wrap-up off and such a session is cut at its deadline), `wake_grace_minutes` 3 (positive: after the computer wakes, a session with no stream line for that long is ended as `interrupted` and resumed), `no_progress_limit` 2, `usage_pause_percent` 90 (integer 1–100: no new step while a usage window not yet reset is used at least this much; 100 turns the prediction off; `run --budget-5h` / `--budget-7d` replace it per window for one run), `usage_backoff_minutes` 30 (doubling up to `usage_backoff_max_minutes` 300; only when a usage-limit hit has no known reset time), `idle_ask` false, `idle_reask_minutes` 60 (integer ≥ 0: awake minutes since the last session after which an idle ask that returned `handed_over` or `none` is repeated without hub activity; sleeps do not count; 0 asks again only on hub activity; see **Idle ask**), `keep_awake` `"on"` (`"off"`, `"on"` or a daily range `"HH:MM-HH:MM"`: when a run keeps the computer from sleeping on its own; `"off"` lets the computer sleep; not a moment, which applies to one run only; `--keep-awake` replaces it for one run, see **Keep awake**) |
 | `[goal]` `max_sessions`, `max_hours` | limits of a goal run: 40 sessions (every session counts: work, triage consultation, goal check), 12 hours (usage-limit waits count, sleeps of the computer do not); both positive; `--max-sessions` / `--max-hours` override them |
 
 A broken config (missing value, missing repository path, `ho` / `claude` not found) exits with code 2 and names the problem.
@@ -254,6 +254,18 @@ any session.
   "Press any key to exit" (also for a `.cmd` started by double-click); `--no-wait` or a non-console stdin exits at once.
 - `run --dry-run --goal <file>` prints the goal-check prompt when no candidate is left. A goal run is not resumed
   after a restart: a new `run --goal` with the same file continues over the same hub state.
+- **A goal binds only its run.** The goal check says that only this run's goal sets the order of work and that
+  goals of earlier runs have ended. In a run without a goal, every fresh product-team prompt (idle ask, review, act,
+  triage consultation; not a resume, limit check or wrap-up) carries instead: *No owner goal is active in this run.
+  Goals of earlier runs have ended and set no order of work; choose the next task by your team's usual task-choice
+  rule.* The first such prompt after a goal run also names that run once, read from `goal.json` (goal file, end
+  status, local end time from the new `ended` field; for an older `goal.json` start + duration + slept time): *The
+  goal run on `<file>` ended (`<status>`, HH:MM, date). If your backlog files still record an order of work set by
+  that goal, remove that order now; keep its unfinished parts as ordinary backlog items.* A `goal.json` still
+  `running` (the run ended without its report) is named as ended without a report, with no time. The request is
+  identified by goal file + start time (a `note` appended later does not repeat it) and counts as given once a
+  session carrying it ends other than `interrupted` or at a usage limit (`meta.goal_cleanup_done`; run log
+  `ended_goal_notice` with `counted`).
 
 ## Owner workflow (escalations)
 
@@ -289,7 +301,9 @@ runs no session until you answer. A session that completed its phase is handled 
 says.
 
 With `idle_ask = true`, an idle verdict `none` that lists backlog items waiting for the owner sends one escalation
-handover from the product team; the product team sees your answer the next time it is asked for work.
+handover from the product team; the product team sees your answer the next time it is asked for work. A later
+`none` that names the same set of items sends nothing (run log `idle_escalation_skipped`); a different set sends a
+new escalation (the previous one stays open).
 
 **A team that is not set up.** Before every new step the dispatcher looks at the open handovers its teams have
 sent (`ho list --from <team> --status all`). One addressed to a hub team that is neither in `[[teams]]` nor the
@@ -544,8 +558,22 @@ escalation.
   session reports. To check without running: `python -m radark run --budget-7d 80 --dry-run` prints
   `budget: below (seven_day 77% < 80%)` at a 77 % reading; with `--budget-7d 75` it prints
   `budget: seven_day 77% >= 75% - the run would end without starting a step`.
-- **Idle ask:** the product session returns a `--json-schema` verdict `{verdict: handed_over | none, reason,
-  waiting_for_owner: [{item, why}]}`; asked at most once per hub state.
+- **Idle ask** (`idle_ask = true`, run without a goal): when no candidate is left, the product team chooses the next
+  work by its usual task-choice rule from its backlog, technical debt and its own regular tasks (the rule and
+  schedule its own instructions name; the engine names no team file). A regular task that is overdue or due within a
+  day goes first and the team does it itself in that session (`did_regular`); otherwise it hands over one backlog
+  item (`handed_over`) or answers `none`. Escalated and stalled items are listed in the prompt (handover, team,
+  kind, reason) with the instruction to pick ready work that does not depend on them; `none` is right only when
+  every ready item waits for the owner or depends on a blocked item. Verdict (`--json-schema`):
+  `{verdict: handed_over | did_regular | none, reason, waiting_for_owner: [{item, why}]}`.
+  When it is asked: on new hub activity since the last ask; at once after `did_regular`, unless the last
+  3 asks all returned `did_regular` (run log `idle_regular_limit`; then it waits as after `none`; a work session
+  resets the count); and after `idle_reask_minutes` (default 60; 0 = only on hub activity) of awake time since the
+  end of the last session, so a sleep of the computer does not count and the count restarts with the dispatcher.
+  An interrupted idle ask runs again. Console after the verdict: `idle: none - <reason>; next ask on hub activity
+  or ~10:26` (an estimate: a sleep moves it; also stored as `meta.idle_reask_at`), `idle: did_regular - <reason>;
+  next ask now`. `dry-run` says when the next idle ask would come (now, `next idle re-ask ~HH:MM if the computer
+  stays awake, or on hub activity`, or only on hub activity) and prints the idle prompt with its no-goal notice.
 
 ## Run-time files (`run_dir`)
 
@@ -560,7 +588,7 @@ until, window, utilization, cause; `backoff_until`, `backoff_minutes`; `running`
 team that is not set up and already escalated: team, sender, item, escalation, at), `runs.jsonl` (the run log), `sessions/<run-id>.jsonl` (full stream per session), `markers/<run-id>.jsonl`
 (hook markers), `tmp/<team>/` (session temp directories; never cleaned by the dispatcher), `session-settings.json`, `hook-config.json`, `lock`, `PAUSE`, `STOP`, `console.log` (copy of the console of every `run` / `once`), `goal.json` (the current or
 last goal run, for observability and `note`: path, hash, started, status, sessions and limits, slept_s, empty_continues,
-guidance_pending, given_text — the goal text the product team last received —, last_verdict, last_verdict_at, result), `goal-report-<YYYYMMDD-HHMMSS>.md`.
+guidance_pending, given_text — the goal text the product team last received —, last_verdict, last_verdict_at, result, ended — local end time), `goal-report-<YYYYMMDD-HHMMSS>.md`.
 
 Run-log events (one JSON line each, with `time`): `dispatcher_start`, `session_start` (team, repo, handover,
 phase, prompt, resume), `session_end` (outcome, exit_code, session, duration_s, auto_answers, denials,
@@ -581,7 +609,7 @@ checks_used), `limit_check` (team, check_team, handover, session, check_session,
 `wait_ended` (handover, team, handovers), `usage_limit`
 (window, resets_at — or backoff_minutes for the fallback), `usage_threshold` (team, handover, window, utilization,
 resets_at), `usage_wait` (window, utilization, resets_at, until, minutes, cause `threshold | limit_hit`; once per
-wait), `usage_resume` (window, cause), `keep_awake_setting` (mode `on | until | range`, text, until, start, end), `keep_awake` (on, at), `idle_ask`, `idle_verdict`, `idle_verdict_invalid`, `goal_start` (path, goal, hash,
+wait), `usage_resume` (window, cause), `keep_awake_setting` (mode `on | until | range`, text, until, start, end), `keep_awake` (on, at), `idle_ask` (team, cause `hub | retry | regular | time`, blocked), `idle_verdict`, `idle_verdict_invalid`, `idle_regular_limit` (team, streak), `idle_escalation_skipped` (team, items), `ended_goal_notice` (team, key, session, outcome, counted), `goal_start` (path, goal, hash,
 max_sessions, max_hours), `goal_guidance_carried` (path, recovered `stored | hash | unknown`, added_chars),
 `goal_check` (team, guidance_changed), `goal_verdict` (status, reason, done, left),
 `goal_verdict_invalid`, `goal_updated` (path, hash, diff_chars), `goal_unreadable` (path), `goal_result` (status
