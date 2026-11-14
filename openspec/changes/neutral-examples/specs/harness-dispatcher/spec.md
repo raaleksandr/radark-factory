@@ -1,13 +1,13 @@
 ## ADDED Requirements
 
 ### Requirement: Public repository holds only invented example data
-The repository's tracked files (README and docs, `openspec/` including archived changes, tests and their golden
-files, the sandbox and code) SHALL use only invented example data: neutral team names (`product`, `app`, `backend`,
-`strategy`), invented handover IDs that do not exist in any real hub, and neutral item IDs and titles. They MUST NOT
-contain handover IDs, item IDs or item titles from a private product hub, owner paths (a drive letter or home
-directory with a user folder), user names, or product or company names. IDs of radark's own hub cited as provenance
-of a change ("Handover: HO-…") are radark's traceability and MAY stay. A change that removes private data MUST
-describe it without quoting it.
+The repository's tracked files SHALL use only invented example data (neutral team names, invented handover IDs,
+neutral item IDs and titles) and MUST NOT contain IDs or titles from a private product hub, owner paths, user names,
+or product or company names. Radark-hub IDs cited as a change's provenance MAY stay.
+
+#### Scenario: Change that removes private data does not quote it
+- **WHEN** a change removes private data from the repository
+- **THEN** its proposal, design, specs, tasks and commit messages describe that data without quoting it
 
 #### Scenario: Grep for known private data finds nothing
 - **WHEN** the repository's tracked files are searched (outside `.git`) for the real IDs, item IDs and titles from
