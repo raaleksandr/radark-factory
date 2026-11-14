@@ -66,7 +66,7 @@ the handover. `ho done` is the last step.
 
 ## 8. Report
 
-- [ ] 8.1 `ho done HO-20261114-upfg -m "..."` listing the commits, the resolution rules as implemented, what changes
+- [x] 8.1 `ho done HO-20261114-upfg -m "..."` listing the commits, the resolution rules as implemented, what changes
       for a running pipeline with `harness.toml` and `run_dir = ".harness"` (expected: nothing but wording), new or
       changed settings (`--config` default; none in the file), the sandbox start lines, the grep result and the test
       result.
