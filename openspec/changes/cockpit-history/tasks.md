@@ -63,7 +63,7 @@ hub made with `ho init` (design H9); never the owner's hub, never a browser. Neu
   sandbox is committed.
 - [x] 3.4 Public-repository check: `git diff` of the change contains no owner path, product or company name, hub or
   run excerpt; IDs are invented.
-- [ ] 3.5 Commit locally (no push, tag, release or reinstall), `ho sync`, then
+- [x] 3.5 Commit locally (no push, tag, release or reinstall), `ho sync`, then
   `ho done HO-20261115-u25v -m "<commits, test counts, how to see the History tab (npm run cockpit / radark cockpit
   → History), decisions that differ from the handover (design Assumptions: H2 full re-read, H3 FIFO pairing and
   running sessions not in totals, H5 result from ho list recipient states without ho show, H6 rows keep all
