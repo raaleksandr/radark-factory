@@ -12,6 +12,10 @@ next such call hang (60 s) and "_die_once": [cmd] makes it exit 1 with no output
 (the hub lock, parallel-sessions D6; give a "_version" without "features" for an ho without it); {"exit": N} -> exit N
 with nothing on stdout (an ho too old for the flag); another dict -> printed as the JSON answer; a string -> printed
 as is (not JSON).
+`list --to <team>` (owner cockpit) answers "list:to:<team>" when present, else every "show:*" entry whose `to` has
+the team, with `my_state` from its `recipients` (default "pending"); without `--status all` closed ones are left out.
+`ack` / `done` are writes like `respond`. A handover with `recipients` (cockpit tests) also gets the acting team's
+new state, status "resolved" when every recipient has finished, and new `allowed_actions`.
 Every call (and a stdin body) is appended to FAKE_HO_DATA + ".calls"."""
 import datetime as dt
 import json
@@ -98,7 +102,8 @@ if cmd == "new":
     inbox.setdefault("action_required", []).append({**summary(h), "my_state": "pending"})
     data.setdefault(f"list:{team}", {"items": []})["items"].append(summary(h))
     save_and_print(summary(h))
-if cmd in ("respond", "decline", "close"):
+FINAL = {"respond": "answered", "decline": "declined", "done": "done"}
+if cmd in ("respond", "decline", "close", "ack", "done"):
     key = f"show:{args[1]}"
     if key not in data:
         fail({"exit": 2, "error": {"code": "handover_not_found", "message": "not found"}})
@@ -110,6 +115,14 @@ if cmd in ("respond", "decline", "close"):
                                 "body": "Auto-closed: all recipients are satisfied.\n"})
         h["status"] = "closed"
     h["last_activity"] = at
+    if isinstance(h.get("recipients"), dict) and cmd != "close" and team in h["recipients"]:
+        state = FINAL.get(cmd) or "acknowledged"
+        h["recipients"][team] = state
+        final = set(FINAL.values()) | ({"acknowledged"} if h.get("expects") == "ack" else set())
+        if h["status"] != "closed" and all(v in final for v in h["recipients"].values()):
+            h["status"] = "resolved"
+        h["allowed_actions"] = (["comment", "seen"] if state in final else
+                                [{"done": "done", "response": "respond"}[h["expects"]], "decline", "comment", "seen"])
     for t in h.get("to", []):
         inbox = data.get(f"inbox:{t}", {})
         inbox["action_required"] = [i for i in inbox.get("action_required", []) if i["id"] != h["id"]]
@@ -127,6 +140,18 @@ if cmd == "inbox":
     default = {"team": team, "action_required": [], "to_review": [], "updates": []}
 elif cmd == "show":
     key, default = f"show:{args[1]}", {"exit": 2, "error": {"code": "handover_not_found", "message": "not found"}}
+elif cmd == "list" and "--to" in args:
+    to = opt("--to")
+    key = f"list:to:{to}"
+    if key not in data:
+        items = []
+        for k, h in data.items():
+            if k.startswith("show:") and isinstance(h, dict) and to in (h.get("to") or []):
+                if opt("--status") != "all" and h.get("status") == "closed":
+                    continue
+                items.append({**summary(h), "my_state": (h.get("recipients") or {}).get(to, "pending")})
+        data[key] = {"items": items}
+    default = {"items": []}
 elif cmd == "list":
     key, default = f"list:{args[args.index('--from') + 1]}", {"items": []}
 else:

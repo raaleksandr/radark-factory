@@ -197,3 +197,29 @@ def test_invalid_limit_check_settings_refused(env, capsys, line, key):
         config_mod.load(env.config_path)
     assert main(["--config", str(env.config_path), "dry-run"]) == 2
     assert key in capsys.readouterr().err
+
+
+# ---- pipeline name (owner-cockpit D3)
+
+def test_pipeline_name_from_key(tmp_path):
+    p = write_config(tmp_path, extra="")
+    p.write_text('name = "alpha"\n' + p.read_text(encoding="utf-8"), encoding="utf-8")
+    cfg = config_mod.load(p)
+    assert cfg.name == "alpha" and cfg.pipeline_name() == "alpha"
+
+
+def test_pipeline_name_from_run_directory_parent(tmp_path):
+    root = tmp_path / "beta"
+    root.mkdir()
+    p = write_config(root)
+    p.write_text(p.read_text(encoding="utf-8").replace('run_dir = "run"', 'run_dir = ".harness"'), encoding="utf-8")
+    cfg = config_mod.load(p)
+    assert cfg.name is None and cfg.pipeline_name() == "beta"
+
+
+@pytest.mark.parametrize("value", ['""', "5", '"  "'])
+def test_pipeline_name_refused(tmp_path, value):
+    p = write_config(tmp_path)
+    p.write_text(f"name = {value}\n" + p.read_text(encoding="utf-8"), encoding="utf-8")
+    with pytest.raises(config_mod.ConfigError, match="name"):
+        config_mod.load(p)

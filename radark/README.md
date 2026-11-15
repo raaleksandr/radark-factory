@@ -163,6 +163,15 @@ network or synced folder may not work).
   configuration's repository conflicts. Of another pipeline only its configuration path, PID, start time and session
   count are shown.
 
+- **Pipeline registry** (`pipelines.json` in the machine directory, changed under `pipelines.lock`): `run`, `once`
+  and `dry-run` record the resolved configuration path, the pipeline name (the optional top-level `name` of the
+  configuration, else the run directory's parent folder) and the last-seen time; `plan`, `status` and the other
+  commands do not. It holds configuration paths only, never a hub path. A registry that cannot be read or written is
+  one `!` line and never stops the run; a corrupt file counts as empty and is replaced on the next write. The owner
+  cockpit (`python -m radark cockpit`, see "Cockpit" in the top-level README) lists these pipelines;
+  `cockpit --forget FILE` removes an entry. `[cockpit] port` in `machine.toml` (1-65535, default 7391) is read by
+  `cockpit` only.
+
 ### Workflow profiles
 
 The work process of a team is a setting: a **workflow profile** names a team's phases, its prompt texts and the
@@ -283,6 +292,7 @@ python -m radark test-slot [--] <command...>            # run a full test suite 
 python -m radark escalations                            # escalated and stalled items with reasons
 python -m radark clear <ID>                             # make an item selectable again (after you answered it)
 python -m radark keep <ID> [--team <id>] [--off]        # next phases resume the previous session
+python -m radark cockpit [--port N] [--config FILE]... [--no-browser] [--forget FILE]   # the owner's local page (README "Cockpit")
 ```
 
 **Plan:** `plan` predicts the order of the next steps; `dry-run` shows the first one in detail (prompt included).

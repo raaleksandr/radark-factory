@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>radark cockpit</title>
+<!-- One self-contained page (owner-cockpit D7): no CDN, no external font, no build step. Every text from a hub is
+     escaped before the minimal Markdown subset is applied; links only to http(s) targets. -->
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #5d6677; --line: #dde1e8; --accent: #2f5bd3;
+  --accent-text: #ffffff; --warn-bg: #fff4e0; --warn: #8a4b00; --err-bg: #fdeaea; --err: #a11c1c; --ok: #1d7a3a;
+  --chip: #eef1f6; --esc-bg: #ffe5e0; --esc: #b3261e; --code: #f0f2f5;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171c; --panel: #1d2128; --text: #e6e9ef; --muted: #9aa3b2; --line: #2e343e; --accent: #7aa2ff;
+    --accent-text: #0f1420; --warn-bg: #3a2c12; --warn: #f3c27a; --err-bg: #3d1d1d; --err: #ff9b9b; --ok: #7fd49a;
+    --chip: #272c35; --esc-bg: #4a211d; --esc: #ffb4a8; --code: #262b33;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+header { position: sticky; top: 0; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--line);
+  display: flex; align-items: center; gap: 18px; padding: 10px 22px; flex-wrap: wrap; }
+header h1 { font-size: 17px; margin: 0; letter-spacing: .02em; }
+nav { display: flex; gap: 4px; }
+nav button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 6px 10px; color: var(--muted);
+  font: inherit; cursor: pointer; }
+nav button.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+nav button:disabled { cursor: default; opacity: .6; }
+.spacer { flex: 1; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+button.btn { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+button.btn.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+button.btn:disabled { opacity: .5; cursor: default; }
+main { max-width: 1060px; margin: 0 auto; padding: 18px 22px 60px; }
+.tab { display: none; } .tab.active { display: block; }
+.placeholder { padding: 40px; text-align: center; color: var(--muted); }
+details.pipes { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px;
+  margin-bottom: 14px; }
+details.pipes summary { cursor: pointer; }
+table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+td, th { text-align: left; padding: 4px 8px; border-top: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 600; color: var(--muted); font-size: 13px; }
+.state-ok { color: var(--ok); } .state-missing, .state-error { color: var(--err); }
+.banner { border-radius: 8px; padding: 8px 14px; margin-bottom: 10px; }
+.banner.err { background: var(--err-bg); color: var(--err); }
+.banner.warn { background: var(--warn-bg); color: var(--warn); }
+h2 { font-size: 16px; margin: 22px 0 10px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px;
+  margin-bottom: 12px; }
+.card.escalation { border-left: 4px solid var(--esc); }
+.card h3 { margin: 0 0 4px; font-size: 15px; }
+.meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--muted); }
+.chip { display: inline-block; background: var(--chip); border-radius: 10px; padding: 0 8px; font-size: 12px;
+  color: var(--text); margin-right: 4px; }
+.chip.esc { background: var(--esc-bg); color: var(--esc); font-weight: 600; }
+.body { margin-top: 8px; overflow-wrap: anywhere; }
+.body pre { background: var(--code); padding: 8px 10px; border-radius: 6px; overflow-x: auto; }
+.body code { background: var(--code); padding: 0 4px; border-radius: 4px; font-size: 13px; }
+.body pre code { background: none; padding: 0; }
+.body h4 { margin: 10px 0 4px; font-size: 14px; }
+.body p { margin: 6px 0; }
+.body ul, .body ol { margin: 6px 0; padding-left: 22px; }
+details.history { margin-top: 8px; }
+details.history summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.event { border-top: 1px dashed var(--line); padding: 6px 0; }
+.answer { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
+.answer textarea { width: 100%; min-height: 70px; font: inherit; padding: 6px 8px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--text); resize: vertical; }
+.answer .buttons { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; align-items: center; }
+.note { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.result { font-size: 13px; margin-top: 6px; white-space: pre-wrap; }
+.result.ok { color: var(--ok); } .result.err { color: var(--err); } .result.warn { color: var(--warn); }
+.empty { color: var(--muted); padding: 6px 0 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>radark cockpit</h1>
+  <nav>
+    <button class="active" data-tab="owner">Owner</button>
+    <button disabled title="coming later">History</button>
+    <button disabled title="coming later">Pipelines status</button>
+  </nav>
+  <span class="spacer"></span>
+  <span class="muted small" id="refreshed"></span>
+  <button class="btn" id="refresh">Refresh</button>
+</header>
+<main>
+  <section class="tab active" id="tab-owner">
+    <div id="banners"></div>
+    <details class="pipes" id="pipes"><summary id="pipes-summary">Pipelines</summary><div id="pipes-body"></div></details>
+    <h2 id="pending-title">Pending</h2>
+    <div id="pending"></div>
+    <h2 id="done-title">Done</h2>
+    <div id="done"></div>
+    <div id="done-more"></div>
+  </section>
+  <section class="tab" id="tab-history"><div class="placeholder">History of finished work - coming later.</div></section>
+  <section class="tab" id="tab-status"><div class="placeholder">State of running pipelines - coming later.</div></section>
+</main>
+<script>
+"use strict";
+const REFRESH_MS = 30000;
+const DONE_FIRST = 20;
+const LABELS = {respond: "Respond", done: "Done", ack: "Acknowledge", decline: "Decline"};
+const NEEDS_TEXT = {respond: true, decline: true};
+let note = "";
+let showAllDone = false;
+let loading = false;
+
+function esc(s) {
+  return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+function inline(t) {
+  // `t` is already escaped; code spans are taken out first so nothing inside them is formatted
+  const codes = [];
+  t = t.replace(/`([^`]+)`/g, function (m, c) { codes.push(c); return "\u0000" + (codes.length - 1) + "\u0000"; });
+  t = t.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, function (m, text, url) {
+    return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + text + "</a>";
+  });
+  t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  t = t.replace(/\u0000(\d+)\u0000/g, function (m, i) { return "<code>" + codes[Number(i)] + "</code>"; });
+  return t;
+}
+
+function md(src) {
+  const lines = esc(src).split(/\r?\n/);  // escaped first, then the minimal Markdown subset
+  const out = [];
+  let para = [], list = null, fence = null;
+  function flushPara() { if (para.length) { out.push("<p>" + para.map(inline).join("<br>") + "</p>"); para = []; } }
+  function flushList() { if (list) { out.push("<" + list.tag + ">" + list.items.map(function (x) {
+    return "<li>" + inline(x) + "</li>"; }).join("") + "</" + list.tag + ">"); list = null; } }
+  for (const line of lines) {
+    if (fence !== null) {
+      if (/^\s*```/.test(line)) { out.push("<pre><code>" + fence.join("\n") + "</code></pre>"); fence = null; }
+      else fence.push(line);
+      continue;
+    }
+    if (/^\s*```/.test(line)) { flushPara(); flushList(); fence = []; continue; }
+    let m = /^\s*(#{1,6})\s+(.*)$/.exec(line);
+    if (m) { flushPara(); flushList(); out.push("<h4>" + inline(m[2]) + "</h4>"); continue; }
+    m = /^\s*([-*]|\d+\.)\s+(.*)$/.exec(line);
+    if (m) {
+      flushPara();
+      const tag = /\d/.test(m[1]) ? "ol" : "ul";
+      if (list && list.tag !== tag) flushList();
+      if (!list) list = {tag: tag, items: []};
+      list.items.push(m[2]);
+      continue;
+    }
+    if (!line.trim()) { flushPara(); flushList(); continue; }
+    flushList();
+    para.push(line);
+  }
+  if (fence !== null) out.push("<pre><code>" + fence.join("\n") + "</code></pre>");
+  flushPara(); flushList();
+  return out.join("");
+}
+
+function el(tag, attrs, children) {
+  const e = document.createElement(tag);
+  for (const k in (attrs || {})) {
+    if (k === "text") e.textContent = attrs[k];
+    else if (k === "cls") e.className = attrs[k];
+    else e.setAttribute(k, attrs[k]);
+  }
+  for (const c of (children || [])) if (c) e.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+  return e;
+}
+
+function when(iso) {
+  if (!iso) return el("span", {text: "-"});
+  const d = new Date(iso);
+  if (isNaN(d)) return el("span", {text: String(iso)});
+  const s = Math.round((Date.now() - d.getTime()) / 1000);
+  let rel;
+  if (s < 60) rel = "just now";
+  else if (s < 3600) rel = Math.floor(s / 60) + " min ago";
+  else if (s < 86400) rel = Math.floor(s / 3600) + " h ago";
+  else rel = Math.floor(s / 86400) + " d ago";
+  return el("span", {text: rel, title: d.toLocaleString()});
+}
+
+async function api(method, path, body) {
+  const opts = {method: method, headers: {}};
+  if (body !== undefined) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
+  const resp = await fetch(path, opts);
+  let data = {};
+  try { data = await resp.json(); } catch (e) { data = {ok: false, error: "no JSON answer (" + resp.status + ")"}; }
+  return {status: resp.status, data: data};
+}
+
+function cardKey(it) { return it.hub_key + "|" + it.id; }
+
+function busyCard(card) {
+  // an answer being typed is never replaced by a refresh
+  const ta = card && card.querySelector("textarea");
+  return !!(ta && (ta.value.trim() || document.activeElement === ta));
+}
+
+function renderBody(box, it) {
+  box.textContent = "";
+  if (it.partial) {
+    const btn = el("button", {cls: "btn", text: "Load the text"});
+    btn.addEventListener("click", async function () {
+      btn.disabled = true;
+      const r = await api("GET", "/api/item?hub_key=" + encodeURIComponent(it.hub_key) + "&id=" +
+        encodeURIComponent(it.id));
+      if (r.data.ok) { Object.assign(it, r.data.item); renderBody(box, it); }
+      else { btn.disabled = false; box.appendChild(el("div", {cls: "result err", text: r.data.error || "failed"})); }
+    });
+    box.appendChild(el("div", {cls: "muted small", text: it.show_error ? "Not loaded: " + it.show_error : ""}));
+    box.appendChild(btn);
+    return;
+  }
+  const body = el("div", {cls: "body"});
+  body.innerHTML = md(it.body);  // md() escapes before formatting
+  box.appendChild(body);
+  if (it.events && it.events.length) {
+    const hist = el("details", {cls: "history"}, [el("summary", {text: "History (" + it.events.length + ")"})]);
+    for (const e of it.events) {
+      const ev = el("div", {cls: "event"}, [
+        el("div", {cls: "meta"}, [el("strong", {text: e.team || "?"}), el("span", {text: e.type || ""}), when(e.at)]),
+      ]);
+      const b = el("div", {cls: "body"});
+      b.innerHTML = md(e.body);
+      ev.appendChild(b);
+      hist.appendChild(ev);
+    }
+    box.appendChild(hist);
+  }
+}
+
+function card(it) {
+  const c = el("div", {cls: "card" + (it.escalation ? " escalation" : ""), "data-key": cardKey(it)});
+  const tags = el("span");
+  if (it.escalation) tags.appendChild(el("span", {cls: "chip esc", text: "escalation"}));
+  for (const t of it.tags || []) if (t !== "escalation") tags.appendChild(el("span", {cls: "chip", text: t}));
+  const pipes = el("span");
+  for (const p of it.pipelines || []) pipes.appendChild(el("span", {cls: "chip", text: p}));
+  c.appendChild(el("h3", {text: it.title || it.id}));
+  c.appendChild(el("div", {cls: "meta"}, [
+    pipes, tags,
+    el("span", {}, ["from ", el("strong", {text: it.from || "?"})]),
+    el("span", {text: "expects " + (it.expects || "?")}),
+    el("span", {}, ["created ", when(it.created)]),
+    el("span", {}, ["last activity ", when(it.last_activity)]),
+    el("span", {text: it.id}),
+    it.pending ? null : el("span", {text: [it.my_state, it.status].filter(Boolean).join(", ")}),
+  ]));
+  const box = el("div");
+  renderBody(box, it);
+  c.appendChild(box);
+  if (it.pending) c.appendChild(answerArea(it));
+  return c;
+}
+
+function answerArea(it) {
+  const area = el("div", {cls: "answer"});
+  const allowed = it.allowed || [];
+  const result = el("div", {cls: "result"});
+  if (!allowed.length) {
+    area.appendChild(el("div", {cls: "muted small", text: it.partial ? "Load the text to answer." :
+      "No answer is possible from the owner now."}));
+    return area;
+  }
+  const ta = el("textarea", {placeholder: "Answer, note or reason"});
+  const buttons = el("div", {cls: "buttons"});
+  for (const action of allowed) {
+    const b = el("button", {cls: "btn" + (action === "respond" || action === "done" ? " primary" : ""),
+      text: LABELS[action] || action});
+    b.addEventListener("click", async function () {
+      const text = ta.value;
+      if (NEEDS_TEXT[action] && !text.trim()) {
+        result.className = "result err";
+        result.textContent = (LABELS[action] || action) + " needs a text.";
+        return;
+      }
+      for (const x of buttons.querySelectorAll("button")) x.disabled = true;
+      result.className = "result"; result.textContent = "Sending...";
+      let r;
+      try { r = await api("POST", "/api/action", {hub_key: it.hub_key, id: it.id, action: action, text: text}); }
+      catch (e) { r = {status: 0, data: {ok: false, error: String(e)}}; }
+      if (r.data.ok) {
+        ta.value = "";
+        result.className = r.data.warning ? "result warn" : "result ok";
+        result.textContent = "Done: " + action + (r.data.warning ? "\n" + r.data.warning : "");
+        await load();
+      } else {
+        result.className = "result err";
+        let msg = r.data.error || ("failed (" + r.status + ")");
+        if (r.data.allowed) msg += " (allowed now: " + (r.data.allowed.join(", ") || "none") + ")";
+        result.textContent = msg;
+        for (const x of buttons.querySelectorAll("button")) x.disabled = false;
+      }
+    });
+    buttons.appendChild(b);
+  }
+  area.appendChild(ta);
+  area.appendChild(buttons);
+  area.appendChild(el("div", {cls: "note", text: note}));
+  area.appendChild(result);
+  return area;
+}
+
+function renderList(container, items, limit) {
+  const old = {};
+  for (const c of container.querySelectorAll(".card")) old[c.getAttribute("data-key")] = c;
+  const frag = document.createDocumentFragment();
+  const shown = limit ? items.slice(0, limit) : items;
+  for (const it of shown) {
+    const prev = old[cardKey(it)];
+    frag.appendChild(busyCard(prev) ? prev : card(it));
+  }
+  container.textContent = "";
+  if (!items.length) container.appendChild(el("div", {cls: "empty", text: "Nothing here."}));
+  container.appendChild(frag);
+}
+
+function renderPipelines(pipes) {
+  const body = document.getElementById("pipes-body");
+  body.textContent = "";
+  const bad = pipes.filter(function (p) { return p.state !== "ok"; }).length;
+  document.getElementById("pipes-summary").textContent = "Pipelines (" + pipes.length + ")" +
+    (bad ? " - " + bad + " not readable" : "");
+  if (!pipes.length) {
+    body.appendChild(el("div", {cls: "empty", text: "No pipeline known yet: run one, or start the cockpit with --config."}));
+    return;
+  }
+  const table = el("table", {}, [el("tr", {}, [el("th", {text: "Name"}), el("th", {text: "Configuration"}),
+    el("th", {text: "State"}), el("th")])]);
+  for (const p of pipes) {
+    const action = el("td");
+    if (p.state === "missing" && p.registered) {
+      const b = el("button", {cls: "btn", text: "Forget"});
+      b.addEventListener("click", async function () {
+        b.disabled = true;
+        const r = await api("POST", "/api/forget", {config: p.config});
+        if (!r.data.ok) { b.disabled = false; action.appendChild(el("div", {cls: "result err", text: r.data.error})); }
+        else await load();
+      });
+      action.appendChild(b);
+    }
+    table.appendChild(el("tr", {}, [el("td", {text: p.name}), el("td", {cls: "small", text: p.config}),
+      el("td", {cls: "state-" + p.state, text: p.state + (p.message ? ": " + p.message : "")}), action]));
+  }
+  body.appendChild(table);
+  if (bad) document.getElementById("pipes").open = true;
+}
+
+function render(data) {
+  note = data.note || "";
+  const banners = document.getElementById("banners");
+  banners.textContent = "";
+  if (data.registry_problem) banners.appendChild(el("div", {cls: "banner warn", text: data.registry_problem}));
+  for (const h of data.hubs || []) {
+    if (h.error) banners.appendChild(el("div", {cls: "banner err",
+      text: "Hub of " + h.pipelines.join(", ") + " could not be read: " + h.error}));
+  }
+  renderPipelines(data.pipelines || []);
+  document.getElementById("pending-title").textContent = "Pending (" + data.pending.length + ")";
+  document.getElementById("done-title").textContent = "Done (" + data.done.length + ")";
+  renderList(document.getElementById("pending"), data.pending, 0);
+  renderList(document.getElementById("done"), data.done, showAllDone ? 0 : DONE_FIRST);
+  const more = document.getElementById("done-more");
+  more.textContent = "";
+  if (!showAllDone && data.done.length > DONE_FIRST) {
+    const b = el("button", {cls: "btn", text: "Show all " + data.done.length});
+    b.addEventListener("click", function () { showAllDone = true; render(data); });
+    more.appendChild(b);
+  }
+}
+
+async function load() {
+  if (loading) return;
+  loading = true;
+  const btn = document.getElementById("refresh");
+  btn.disabled = true;
+  try {
+    const r = await api("GET", "/api/items");
+    if (r.status === 200) {
+      render(r.data);
+      document.getElementById("refreshed").textContent = "updated " + new Date().toLocaleTimeString();
+    } else {
+      document.getElementById("refreshed").textContent = "refresh failed: " + (r.data.error || r.status);
+    }
+  } catch (e) {
+    document.getElementById("refreshed").textContent = "cockpit not reachable: " + e;
+  } finally {
+    loading = false;
+    btn.disabled = false;
+  }
+}
+
+document.getElementById("refresh").addEventListener("click", load);
+setInterval(load, REFRESH_MS);
+load();
+</script>
+</body>
+</html>

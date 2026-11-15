@@ -1,5 +1,6 @@
 # Copy to radark.toml and adjust. Relative paths are resolved from this file's directory.
 
+# name = "app-pipeline"        # the pipeline's name in the cockpit (default: the run directory's parent folder)
 hub = 'D:\work\hub'
 # run_dir = ".radark"          # default; relative to this file. state.json, runs.jsonl, sessions/, markers/,
                               # lock, PAUSE, STOP. Without it a legacy .harness/ is used if only it exists

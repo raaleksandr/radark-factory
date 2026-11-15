@@ -789,3 +789,53 @@ def test_start_line_names_the_other_pipeline(env, machine_home, capsys):
     assert "limits 2 sessions, 1 test run" in out
     assert f"Other pipeline running: {env.cfg().path} (1 session running)" in out
     a.close()
+
+
+# ---- pipeline registry and cockpit port (owner-cockpit D2, D3)
+
+def test_registry_record_update_forget(machine_home, tmp_path):
+    reg = machine_mod.Registry(machine_home)
+    a, b = tmp_path / "a" / "radark.toml", tmp_path / "b" / "radark.toml"
+    assert reg.record(a, "alpha") is None and reg.record(b, "beta") is None
+    assert [(e["name"], e["config"]) for e in reg.entries()] == [("alpha", os.path.realpath(a)),
+                                                                 ("beta", os.path.realpath(b))]
+    assert reg.record(a, "alpha-2") is None
+    assert [e["name"] for e in reg.entries()] == ["alpha-2", "beta"]
+    assert all(e["last_seen"] for e in reg.entries())
+    data = json.loads((machine_home / "pipelines.json").read_text(encoding="utf-8"))
+    assert data["schema_version"] == 1 and len(data["pipelines"]) == 2
+    assert reg.forget(a) is True and reg.forget(a) is False
+    assert [e["name"] for e in reg.entries()] == ["beta"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="paths are case-insensitive on Windows only")
+def test_registry_key_is_case_insensitive_on_windows(machine_home, tmp_path):
+    reg = machine_mod.Registry(machine_home)
+    path = tmp_path / "Pipe" / "radark.toml"
+    reg.record(path, "alpha")
+    reg.record(str(path).upper(), "alpha")
+    assert len(reg.entries()) == 1
+    assert reg.forget(str(path).lower()) is True
+
+
+def test_registry_corrupt_file_reported_and_rewritten(machine_home, tmp_path):
+    (machine_home / "pipelines.json").write_text("{not json", encoding="utf-8")
+    reg = machine_mod.Registry(machine_home)
+    entries, problem = reg.read()
+    assert entries == [] and "pipelines.json" in problem and "not valid" in problem
+    assert "not valid" in reg.record(tmp_path / "radark.toml", "alpha")
+    assert [e["name"] for e in reg.entries()] == ["alpha"] and reg.read()[1] is None
+
+
+def test_cockpit_port_default_and_valid(machine_home):
+    assert machine_mod.load_cockpit_port(machine_home) == 7391
+    (machine_home / "machine.toml").write_text("[cockpit]\nport = 7400\n")
+    assert machine_mod.load_cockpit_port(machine_home) == 7400
+
+
+@pytest.mark.parametrize("value", ["0", "70000", "true", '"7400"'])
+def test_cockpit_port_refused_naming_key(machine_home, value):
+    (machine_home / "machine.toml").write_text(f"[cockpit]\nport = {value}\n")
+    with pytest.raises(MachineError, match=r"machine\.toml.*cockpit\.port"):
+        machine_mod.load_cockpit_port(machine_home)
+    assert load_limits(machine_home) == Limits()  # a bad port does not concern the limits

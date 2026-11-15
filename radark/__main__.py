@@ -1,5 +1,5 @@
 """CLI and loop: python -m radark [--config FILE]
-run|once|dry-run|plan|status|test-slot|escalations|clear|keep|note.
+run|once|dry-run|plan|status|test-slot|escalations|clear|keep|note|cockpit.
 
 Without --config the configuration file is radark.toml in the current directory, or the legacy harness.toml
 (radark-config-names D1)."""
@@ -2876,6 +2876,17 @@ def plan_run(d: Dispatcher, steps: int, goal: GoalRun | None, max_sessions: int 
     return 0
 
 
+def record_pipeline(d: Dispatcher, directory: Path) -> None:
+    """`run` / `once` / `dry-run`: this pipeline in the machine-wide registry the cockpit reads (owner-cockpit D3);
+    a problem is one line and never stops the run."""
+    try:
+        problem = machine_mod.Registry(directory).record(d.cfg.path, d.cfg.pipeline_name())
+    except machine_mod.MachineError as exc:
+        problem = f"{exc}; the cockpit may not list this pipeline"
+    if problem:
+        d.problem(problem)
+
+
 def slot_command(argv: list[str]) -> list[str] | None:
     """The command after `test-slot` (after an optional `--config X`), None for another command; read before
     argparse, so the command's own options stay its own."""
@@ -2935,6 +2946,14 @@ def main(argv=None) -> int:
     k.add_argument("--off", action="store_true", help="go back to a fresh session per phase")
     n = sub.add_parser("note", help="append a timestamped note to the goal file of the running goal run")
     n.add_argument("text")
+    ck = sub.add_parser("cockpit", help="local web page listing what is addressed to the owner in every pipeline on "
+                                        "this computer; answers short items through ho")
+    ck.add_argument("--port", type=int, metavar="N", help="port on 127.0.0.1 (default [cockpit] port of machine.toml, "
+                                                         "else 7391)")
+    ck.add_argument("--config", dest="cockpit_configs", action="append", default=[], metavar="FILE",
+                    help="also show this pipeline (repeatable); it is recorded in the pipeline registry")
+    ck.add_argument("--no-browser", action="store_true", help="do not open the browser")
+    ck.add_argument("--forget", metavar="FILE", help="remove a configuration from the pipeline registry and exit")
     args = p.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):  # titles and agent text may not fit the console code page
         try:
@@ -2953,6 +2972,10 @@ def main(argv=None) -> int:
         budget[window] = value
     if args.command == "status":  # needs no readable configuration, no `ho` and no lock (machine-wide D9)
         return status(args.config)
+    if args.command == "cockpit":  # needs no configuration in the current directory (owner-cockpit D1)
+        from . import cockpit
+        return cockpit.command(args.port, ([args.config] if args.config else []) + args.cockpit_configs,
+                               no_browser=args.no_browser, forget=args.forget)
     until = None
     if getattr(args, "until", None) is not None:
         at = parse_until(args.until, dt.datetime.now())
@@ -3058,6 +3081,7 @@ def main(argv=None) -> int:
     except machine_mod.MachineError as exc:
         print(f"Machine error: {exc}; not starting.", file=sys.stderr)
         return 2
+    record_pipeline(d, directory)
     print(config_mod.summary(cfg, config_mod.claude_version(cfg), ho.line()))
     try:
         config_mod.check_owner(cfg, d.hub.teams())

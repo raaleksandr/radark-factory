@@ -87,6 +87,41 @@ repository belongs to one running pipeline; `radark status` shows them (see "Sev
 Full documentation: [radark/README.md](radark/README.md). Design: [openspec/specs](openspec/specs),
 decision record: [docs/decisions](docs/decisions), background research: [docs/research](docs/research).
 
+## Cockpit
+
+One local page for the owner: everything addressed to the owner team (escalations the dispatcher created and direct
+requests from teams) in the hubs of all pipelines on this computer, split into **Pending** and **Done**, newest first,
+with the pipeline name(s), sender, times, title, tags (an `escalation` badge), `expects`, the text and its history.
+A short answer is given right on the page: only the actions `ho show` allows for the owner (`respond`, `done` with an
+optional note, `ack`, `decline` with a reason), run through `ho` as the owner team, followed by `ho sync`. Files to
+place or code to change are handled outside the cockpit, as each item's note says. The page refreshes every 30 s and
+on "Refresh"; the "History" and "Pipelines status" tabs are reserved for later.
+
+```
+npm run cockpit                       # in this repository: the same as python -m radark cockpit
+radark cockpit                        # or: python -m radark cockpit; opens http://127.0.0.1:7391/ in the browser
+radark cockpit --port 7400            # another port; or set [cockpit] port in machine.toml (--port wins)
+radark cockpit --config D:\work\app-pipeline\radark.toml   # also show this pipeline (repeatable) and register it
+radark cockpit --no-browser           # start the server only
+radark cockpit --forget D:\work\old-pipeline\radark.toml   # drop a pipeline from the list (the registry only)
+```
+
+The pipelines shown are those that ran `run`, `once` or `dry-run` on this computer (a registry `pipelines.json` in the
+machine directory) plus each `--config`; the pipeline name is the optional top-level `name` of its `radark.toml`, else
+the name of its folder. A configuration that is gone is listed as missing with a "Forget" button. If the port is busy
+with a running cockpit, the command opens that one and exits 0; if another program has it, the command exits 2 and
+names `--port N` and `[cockpit] port`; it never switches ports on its own.
+
+A pipeline repository gets `npm run cockpit` with one line in its own `package.json`:
+
+```json
+"scripts": { "cockpit": "python -m radark cockpit" }
+```
+
+**Security:** the server listens on 127.0.0.1 only, has no login and sends nothing anywhere. It refuses requests
+for another host name (DNS rebinding) and writes from another origin, takes writes only as `POST` with a JSON body,
+sends no CORS headers, and escapes all hub text in the page. It never edits hub files: every change goes through `ho`.
+
 ## Development
 
 ```

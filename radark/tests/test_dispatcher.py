@@ -341,3 +341,33 @@ def test_replay_change_notes_stall_after_two_sessions(env):
     assert sum("(commits changed only the change's own files)" in x for x in lines) == 2
     assert [e["reason"] for e in log_events(env) if e["event"] == "stalled"] == ["stalled: 2 sessions without progress"]
     assert [c for c in env.ho_calls() if c["args"][:3] == ["new", "--to", "owner"]]
+
+
+# ---- pipeline registry (owner-cockpit D3, task 1.3)
+
+def registry(machine_home):
+    from radark.machine import Registry
+    return Registry(machine_home)
+
+
+def test_dry_run_records_pipeline(env, machine_home):
+    env.config_path.write_text('name = "alpha"\n' + env.config_path.read_text(encoding="utf-8"), encoding="utf-8")
+    assert main(["--config", str(env.config_path), "dry-run"]) == 0
+    [entry] = registry(machine_home).entries()
+    assert entry["name"] == "alpha" and entry["config"] == os.path.realpath(env.config_path) and entry["last_seen"]
+
+
+def test_plan_does_not_record(env, machine_home):
+    assert main(["--config", str(env.config_path), "plan"]) == 0
+    assert not (machine_home / "pipelines.json").exists()
+
+
+def test_corrupt_registry_is_one_line_and_once_still_runs(env, machine_home, capsys):
+    env.set_hub(hub_with_new_task([(LATER, "app", "ack", "")]))
+    env.set_claude([{"steps": [START, {"text": "CHANGE: add-export"}], "result": {"result": "CHANGE: add-export"}}])
+    (machine_home / "pipelines.json").write_text("{broken", encoding="utf-8")
+    assert main(["--config", str(env.config_path), "once"]) == 0
+    out = capsys.readouterr().out
+    assert sum("pipelines.json" in line and "! " in line for line in out.splitlines()) == 1
+    assert [c for c in env.claude_calls() if c["argv"] != ["--version"]]  # the session ran
+    assert [e["config"] for e in registry(machine_home).entries()] == [os.path.realpath(env.config_path)]

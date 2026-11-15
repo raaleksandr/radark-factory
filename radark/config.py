@@ -86,6 +86,11 @@ class Config:
     workflow_dir: Path | None = None  # `[workflow] dir`, resolved; None when the default directory is absent
     profiles: dict[str, workflow.Profile] = field(default_factory=dict)  # loaded profiles by name
     notes: tuple[str, ...] = ()  # legacy-name lines for the start lines, dry-run and plan (radark-config-names D3)
+    name: str | None = None  # optional top-level `name`: the pipeline's name in the registry and cockpit (cockpit D3)
+
+    def pipeline_name(self) -> str:
+        """`name`, else the name of the run directory's parent folder (usually `<pipeline>/.harness`)."""
+        return self.name or self.run_dir.parent.name or str(self.run_dir)
 
     def team(self, team_id: str) -> Team:
         for t in self.teams:
@@ -195,6 +200,9 @@ def load(path: str | Path, legacy_note: str | None = None) -> Config:
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"{path}: {exc}") from exc
     base = path.parent
+    name = data.get("name")
+    if name is not None and (not isinstance(name, str) or not name.strip()):
+        raise ConfigError(f"name must be a non-empty string naming the pipeline, not {name!r}")
 
     hub = Path(_req(data, "hub"))
     if not (hub / "hub.json").is_file():
@@ -255,6 +263,7 @@ def load(path: str | Path, legacy_note: str | None = None) -> Config:
         goal_max_hours=float(goal.get("max_hours", 12)),
         parallel_sessions=loop.get("parallel_sessions", 1),
         notes=tuple(n for n in (legacy_note, run_dir_note) if n),
+        name=name.strip() if name else None,
     )
     _workflow(cfg, data.get("workflow", {}), base)
     if cfg.owner_team in cfg.team_ids():

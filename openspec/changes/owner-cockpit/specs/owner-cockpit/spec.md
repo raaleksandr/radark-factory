@@ -56,11 +56,15 @@ A registered configuration that no longer exists SHALL be listed as missing, and
 - **THEN** the entry is removed from the registry, one line confirms it, no server starts and the command exits 0
 
 ### Requirement: Owner items list
-The main page SHALL list every handover addressed to the pipeline's owner team (`owner_team`, default `owner`), read with `ho list --to <owner team> --status all` and `ho show <ID>` as that team, in two sections: Pending (the owner's state is pending, acknowledged or returned and the handover is not closed) and Done (all others), each sorted by last activity, newest first.
+The main page SHALL list every handover addressed to the pipeline's owner team (`owner_team`, default `owner`), read with `ho list --to <owner team> --status all` and `ho show <ID>` as that team, in two sections: Pending (the owner's state is pending or returned, or acknowledged on a handover that expects `done` or `response`, and the handover is not closed) and Done (all others, including an acknowledged handover that expects `ack`), each sorted by last activity, newest first.
 
 #### Scenario: Pending and done
 - **WHEN** a hub has an open escalation to `owner` and a resolved request answered by `owner`
 - **THEN** the escalation is under Pending and the request under Done, each with its pipeline name
+
+#### Scenario: Acknowledged note
+- **WHEN** the owner acknowledges a handover that expects `ack`
+- **THEN** it is listed under Done
 
 #### Scenario: Newest first
 - **WHEN** two pending items have last activity at 10:00 and 11:00

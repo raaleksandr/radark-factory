@@ -1,5 +1,6 @@
-"""Wrapper around the `ho` CLI. The only hub writes are escalation handovers to the owner (`new`, `close` of
-those) and `sync`; team handovers are never changed."""
+"""Wrapper around the `ho` CLI. The dispatcher's only hub writes are escalation handovers to the owner (`new`,
+`close` of those) and `sync`; team handovers are never changed. The owner cockpit answers as the owner team
+(`act`, owner-cockpit D5)."""
 from __future__ import annotations
 
 import json
@@ -14,6 +15,7 @@ from .runner import kill_tree
 
 TIMEOUT_S = 120  # awake time per hub command (harness-survive-sleep D3)
 SLICE_S = 5  # one wait; timing out of a slice only means "not yet"
+OWNER_ACTIONS = ("respond", "done", "ack", "decline")  # answers the owner cockpit can give (owner-cockpit D5)
 READS = ("inbox", "show", "list")  # re-run once when killed by a sleep (D4); writes never are
 
 
@@ -211,6 +213,21 @@ class Hub:
 
     def close(self, handover_id: str, team: str, message: str, force: bool = False) -> dict:
         return self._run(["close", handover_id, "-m", message] + (["--force"] if force else []), team=team)
+
+    # ---- the owner cockpit (owner-cockpit D4, D5): reads and answers as the owner team
+
+    def addressed_to(self, team: str) -> list[dict]:
+        """Every handover addressed to `team`, any status, with `my_state` for `team`."""
+        return self._run(["list", "--to", team, "--status", "all"], team=team).get("items", [])
+
+    def act(self, action: str, handover_id: str, team: str, body: str = "") -> dict:
+        """`ho respond|done|ack|decline <ID> --body -` as `team`; an empty body for `done` / `ack` sends none."""
+        if action not in OWNER_ACTIONS:
+            raise HoUsageError(f"not an owner action: {action}")
+        args = [action, handover_id]
+        if body:
+            return self._run(args + ["--body", "-"], team=team, stdin=body)
+        return self._run(args, team=team)
 
     def sync(self) -> dict:
         return self._run(["sync"])

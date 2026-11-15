@@ -110,6 +110,28 @@ def load_limits(directory: Path) -> Limits:
     return Limits(**values)
 
 
+DEFAULT_COCKPIT_PORT = 7391  # owner-cockpit D2
+
+
+def load_cockpit_port(directory: Path) -> int:
+    """`[cockpit] port` of `<dir>/machine.toml` (an integer 1-65535), else 7391; read by `cockpit` only, so a wrong
+    value never stops a run (owner-cockpit D2)."""
+    path = Path(directory) / "machine.toml"
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return DEFAULT_COCKPIT_PORT
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise MachineError(f"{path}: cannot be read: {exc}") from exc
+    section = data.get("cockpit", {})
+    if not isinstance(section, dict):
+        raise MachineError(f"{path}: [cockpit] must be a table")
+    port = section.get("port", DEFAULT_COCKPIT_PORT)
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise MachineError(f"{path}: cockpit.port must be an integer from 1 to 65535, not {port!r}")
+    return port
+
+
 # -- OS locks and records (design D4) -------------------------------------------------------
 
 if os.name == "nt":  # imported once: a later stand-in for the module (tests of a key press) does not matter
@@ -253,6 +275,91 @@ def slot_number(path: Path) -> int | None:
         return int(path.stem.rsplit("-", 1)[1])
     except (IndexError, ValueError):
         return None
+
+
+# -- the pipeline registry (owner-cockpit D3) --------------------------------------------------
+
+REGISTRY_LOCK_S = 5.0  # bound on waiting for pipelines.lock
+
+
+class Registry:
+    """`<dir>/pipelines.json`: the configuration paths of the pipelines that ran on this computer, with their names
+    and last-seen times, for the cockpit. Holds configuration paths only, never a hub path (machine D11). Changed
+    under `pipelines.lock` and written atomically; a corrupt file counts as empty and is replaced on the next write."""
+
+    def __init__(self, directory: Path):
+        self.dir = Path(directory)
+        self.path = self.dir / "pipelines.json"
+        self.lock_path = self.dir / "pipelines.lock"
+
+    def read(self) -> tuple[list[dict], str | None]:
+        """(entries, a problem line or None). A missing file: no entries, no problem."""
+        try:
+            text = self.path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return [], None
+        except OSError as exc:
+            return [], f"the pipeline registry {self.path} cannot be read: {exc}"
+        try:
+            data = json.loads(text)
+            items = data["pipelines"]
+            if not isinstance(items, list):
+                raise ValueError("pipelines is not a list")
+        except (ValueError, KeyError, TypeError) as exc:
+            return [], f"the pipeline registry {self.path} is not valid ({exc}); it is treated as empty"
+        out = [e for e in items if isinstance(e, dict) and isinstance(e.get("config"), str) and e["config"]]
+        return out, None
+
+    def entries(self) -> list[dict]:
+        return self.read()[0]
+
+    @contextmanager
+    def _locked(self):
+        lock = FileLock(self.lock_path)
+        try:
+            ok = lock.acquire(REGISTRY_LOCK_S)
+        except OSError as exc:
+            raise MachineError(f"the pipeline registry lock {self.lock_path} cannot be taken: {exc}") from exc
+        if not ok:
+            raise MachineError(f"the pipeline registry {self.path} is busy (lock {self.lock_path})")
+        try:
+            yield
+        finally:
+            lock.release()
+
+    def _write(self, entries: list[dict]) -> None:
+        try:
+            write_record(self.path, {"schema_version": 1, "pipelines": entries})
+        except OSError as exc:
+            raise MachineError(f"the pipeline registry {self.path} cannot be written: {exc}") from exc
+
+    def record(self, config, name: str) -> str | None:
+        """Add or update the entry of `config` (resolved path); returns a problem line (a corrupt file that was
+        replaced) or None; raises MachineError when the registry cannot be changed."""
+        config = os.path.realpath(str(config))
+        key = norm(config)
+        with self._locked():
+            entries, problem = self.read()
+            entry = {"config": config, "name": name, "last_seen": local_now()}
+            for i, e in enumerate(entries):
+                if norm(e["config"]) == key:
+                    entries[i] = entry
+                    break
+            else:
+                entries.append(entry)
+            self._write(entries)
+        return problem
+
+    def forget(self, config) -> bool:
+        """Remove the entry of `config`; False when it is not registered."""
+        key = norm(config)
+        with self._locked():
+            entries, _ = self.read()
+            kept = [e for e in entries if norm(e["config"]) != key]
+            if len(kept) == len(entries):
+                return False
+            self._write(kept)
+        return True
 
 
 # -- the machine layer of one instance --------------------------------------------------------

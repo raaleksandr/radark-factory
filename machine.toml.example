@@ -11,3 +11,8 @@
 [machine]
 sessions = 2     # Claude Code sessions running at once over all pipelines (work sessions, idle asks, goal checks)
 test_runs = 1    # full test suites run at once through `radark-test-slot <command>`
+
+# The owner cockpit (`python -m radark cockpit`): its local port, an integer from 1 to 65535; `--port N` wins.
+# A wrong value stops only `cockpit` (exit 2), never run / once / dry-run.
+# [cockpit]
+# port = 7391

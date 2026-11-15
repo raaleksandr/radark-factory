@@ -93,9 +93,14 @@ On each `GET /api/items` (no cache; a refresh every 30 s is cheap enough for a h
    command: `ho list --to <owner_team> --status all` with `HO_TEAM=<owner_team>`, then `ho show <ID>` per item for
    body, events and `allowed_actions`. **Assumption** — `show` for every item, pending and done, so the history is
    complete; to bound the cost, done items older than the newest 50 per hub are listed without `show` (title and
-   states only, body loaded on demand through `GET /api/item?pipeline=…&id=…`).
+   states only, body loaded on demand through `GET /api/item?hub_key=…&id=…`; the item's opaque `hub_key` names the hub, so
+   one item shared by two pipelines has one address).
 3. Splits items: **Pending** when the owner's `my_state` is `pending`, `acknowledged` or `returned` and the handover
    status is not `closed`; **Done** otherwise. Both sorted by `last_activity`, newest first.
+   **Assumption (found in apply)** — `ack` of an `expects ack` handover is its answer: the installed `ho` then
+   reports `my_state` `acknowledged` and status `resolved`, so `acknowledged` counts as pending only on a `done` /
+   `response` handover (where it means "taken in progress"). Without this an acknowledged note would never leave
+   Pending.
 4. A hub that fails (`HoError`, `ho` incompatible) yields an error entry shown at the top of the page for its
    pipelines; the others still show.
 

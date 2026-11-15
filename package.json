@@ -2,6 +2,7 @@
   "name": "radark-factory",
   "private": true,
   "scripts": {
-    "screen-off": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/screen-off.ps1"
+    "screen-off": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/screen-off.ps1",
+    "cockpit": "python -m radark cockpit"
   }
 }
