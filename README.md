@@ -95,7 +95,7 @@ with the pipeline name(s), sender, times, title, tags (an `escalation` badge), `
 A short answer is given right on the page: only the actions `ho show` allows for the owner (`respond`, `done` with an
 optional note, `ack`, `decline` with a reason), run through `ho` as the owner team, followed by `ho sync`. Files to
 place or code to change are handled outside the cockpit, as each item's note says. The page refreshes every 30 s and
-on "Refresh"; the "Pipelines status" tab is reserved for later.
+on "Refresh".
 
 The **History** tab lists the work the pipelines did: one row per handover per pipeline (two pipelines on one hub
 keep their own rows), newest first, with the pipeline, ID, title, team(s), first session start, last session end,
@@ -108,6 +108,18 @@ pipeline (or all) and a period (**Last run**, for each pipeline since its latest
 the handovers, sessions, working time and accepted ones, and the sessions without a handover (goal checks, idle
 asks). The History reads each pipeline's run log (`runs.jsonl` in its run directory) and each hub once per refresh
 with `ho list --status all`; it changes nothing. Times are shown in the browser's time zone.
+
+The **Now** tab shows what the pipelines are doing right now: one card per pipeline, running or not, with its name.
+A card is `running` (a live dispatcher instance on this computer belongs to the pipeline; its start and PID are
+shown), `not running`, or `unknown` (its configuration or run log cannot be read); it says **Goal run** with the goal
+file's name and start, or **Regular run**; it lists the sessions running now (team, handover ID, title, phase, since,
+for how long; sessions left open by a dispatcher that is gone are listed as interrupted) and the newest run-log event;
+a card that is not running also shows the last session's end and outcome, the last start and the stop, when
+recorded. A line on top shows the session slots in use against the machine limit, the running pipelines and the
+instances that belong to no shown pipeline. Now reads the machine directory's instance records (`instances/*.json`,
+liveness by a read-only lock probe), each run directory's `runs.jsonl` and `goal.json`, and each hub's handover list
+with `ho list --status all` (reused for 30 s); it changes none of them, not even stale instance records, which are
+left to the dispatcher. The tab refreshes every 10 s while it is open.
 
 ```
 npm run cockpit                       # in this repository: the same as python -m radark cockpit

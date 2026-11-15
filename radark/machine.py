@@ -261,6 +261,30 @@ def probe(lock_path: Path, remove_lock: bool = False) -> bool:
     return False
 
 
+def probe_readonly(lock_path: Path) -> bool | None:
+    """Liveness of a lock without changing any file (cockpit-now N2): True when another process holds it, False when
+    it is free or does not exist, None when it cannot be opened. Unlike `probe`, no record or lock file is removed
+    and no file is created (the file is opened without `O_CREAT`); a free lock is held for an instant only."""
+    try:
+        fd = os.open(str(lock_path), os.O_RDWR)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return None
+    try:
+        try:
+            _os_lock(fd)
+        except OSError:
+            return True
+        try:
+            _os_unlock(fd)
+        except OSError:
+            pass
+        return False
+    finally:
+        os.close(fd)
+
+
 def repo_key(repo) -> str:
     """SHA-256 (first 16 hex) of the resolved, normcased repository path (design D1)."""
     return hashlib.sha256(norm(repo).encode("utf-8")).hexdigest()[:16]

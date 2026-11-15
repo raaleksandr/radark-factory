@@ -409,7 +409,7 @@ def test_page_served_self_contained(env, start):
     assert not re.search(r"""(src|href)\s*=\s*["']?\s*(https?:)?//""", html)
     assert "@import" not in html and "url(" not in html
     assert not re.search(r"<link\b", html) and not re.search(r"<script[^>]+src", html)
-    for tab in ("Owner", "History", "Pipelines status", "Refresh", "Pending", "Done"):
+    for tab in ("Owner", "History", "Now", "Refresh", "Pending", "Done"):
         assert tab in html
     assert cockpit.NOTE not in html  # the note comes from the API, as one source of truth
 

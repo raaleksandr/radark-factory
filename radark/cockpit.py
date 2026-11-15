@@ -6,7 +6,8 @@ are `ho list --to <owner> --status all` and `ho show`, answers `ho respond|done|
 by `ho sync`, all as the owner team through `hub.Hub`, after the same `ho` contract check the engine uses. The
 server never writes a hub file; the only file it changes is the machine-wide pipeline registry. The History tab
 (`GET /api/history`, change cockpit-history) reads each pipeline's `runs.jsonl` and `ho list --status all` through
-`cockpit_history`."""
+`cockpit_history`. The Now tab (`GET /api/now`, change cockpit-now) reads the machine directory's instance records
+read only, each run directory's `runs.jsonl` and `goal.json`, and the same hub list, through `cockpit_now`."""
 from __future__ import annotations
 
 import hashlib
@@ -15,6 +16,7 @@ import json
 import os
 import sys
 import threading
+import time
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -24,6 +26,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from . import cockpit_history as history_mod
+from . import cockpit_now as now_mod
 from . import config as config_mod
 from . import machine as machine_mod
 from .hub import OWNER_ACTIONS, Hub, HoError, HoLifecycleError, HoVersion, check_ho
@@ -37,6 +40,7 @@ MAX_TEXT = 20_000  # characters of an answer (design D5)
 HO_TIMEOUT_S = 30.0  # awake time per `ho` call of the cockpit; a page refresh must not hang for minutes
 HEALTH_TIMEOUT_S = 2.0
 SHOW_WORKERS = 4  # `ho show` calls at once per hub
+NOW_LIST_S = 30.0  # the Now tab reuses a hub's handover list this long (cockpit-now N6)
 PENDING_STATES = ("pending", "acknowledged", "returned")
 NEEDS_TEXT = ("respond", "decline")
 NOTE = ("Answer here only if a short answer is enough; files to place or code to change must be handled outside "
@@ -84,6 +88,7 @@ class Cockpit:
     """The data side of the server: pipelines, hub reads and answers. `hub_factory(ho, hub)` makes the `Hub`."""
 
     def __init__(self, directory: Path, configs=(), hub_factory=None):
+        self.dir = Path(directory)
         self.registry = machine_mod.Registry(directory)
         self.configs = [os.path.realpath(str(c)) for c in configs]
         self.hub_factory = hub_factory or (lambda ho, hub: Hub(ho, hub, timeout=HO_TIMEOUT_S))
@@ -92,6 +97,8 @@ class Cockpit:
         self._write_locks: dict[str, threading.Lock] = {}
         self._locks_lock = threading.Lock()
         self.logs = history_mod.LogCache()
+        self._now_lists: dict[str, tuple[float, tuple]] = {}
+        self._now_lock = threading.Lock()
 
     # ---- pipelines (design D3, D4.1)
 
@@ -245,6 +252,44 @@ class Cockpit:
                                                     items, error))
         return history_mod.history(inputs, period, pipeline, now)
 
+    # ---- now (cockpit-now N1, N6, N8)
+
+    def now(self, now=None) -> dict:
+        """The current state of every shown pipeline: live instances (read-only probe), run log, goal record, and
+        each hub's list reused for NOW_LIST_S. Read only: no `ho` write, no file written, created or removed."""
+        entries, _, _, loaded = self._load()
+        by_entry = {id(entry): (group, run_dir) for entry, group, run_dir in loaded}
+        hubs: dict[str, Group] = {}
+        for _, group, _ in loaded:
+            hubs.setdefault(machine_mod.norm(group.hub), group)
+        keys = list(hubs)
+        with ThreadPoolExecutor(max_workers=max(1, len(keys))) as pool:
+            lists = dict(zip(keys, pool.map(lambda k: self._now_list(k, hubs[k]), keys)))
+        inputs = []
+        for entry in entries:
+            found = by_entry.get(id(entry))
+            if found is None:
+                inputs.append(now_mod.PipelineNow(entry["name"], entry["config"], state=entry["state"],
+                                                  message=entry.get("message")))
+                continue
+            group, run_dir = found
+            items, error = lists[machine_mod.norm(group.hub)]
+            inputs.append(now_mod.PipelineNow(
+                entry["name"], entry["config"], Path(run_dir), log=self.logs.read(Path(run_dir) / "runs.jsonl"),
+                dir_readable=now_mod.run_dir_readable(run_dir), goal=now_mod.read_goal(run_dir), items=items,
+                hub_error=error))
+        return now_mod.now(self.dir, inputs, at=now)
+
+    def _now_list(self, key: str, group: Group) -> tuple[dict[str, dict] | None, str | None]:
+        with self._now_lock:
+            found = self._now_lists.get(key)
+        if found and time.monotonic() - found[0] < NOW_LIST_S:
+            return found[1]
+        result = self._list_all(group)
+        with self._now_lock:
+            self._now_lists[key] = (time.monotonic(), result)
+        return result
+
     def _list_all(self, group: Group) -> tuple[dict[str, dict] | None, str | None]:
         try:
             listed = self._hub(group).all_handovers(group.owner_team)
@@ -379,6 +424,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(400, {"ok": False, "error": "unknown period",
                                             "allowed": list(history_mod.PERIODS)})
                 return self._json(200, self.server.cockpit.history(query.get("pipeline") or None, period))
+            if url.path == "/api/now":
+                return self._json(200, self.server.cockpit.now())
             if url.path == "/api/item":
                 code, data = self.server.cockpit.item(query.get("hub_key", ""), query.get("id", ""))
                 return self._json(code, data)

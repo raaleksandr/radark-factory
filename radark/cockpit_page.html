@@ -39,7 +39,6 @@ button.btn.primary { background: var(--accent); color: var(--accent-text); borde
 button.btn:disabled { opacity: .5; cursor: default; }
 main { max-width: 1060px; margin: 0 auto; padding: 18px 22px 60px; }
 .tab { display: none; } .tab.active { display: block; }
-.placeholder { padding: 40px; text-align: center; color: var(--muted); }
 details.pipes { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px;
   margin-bottom: 14px; }
 details.pipes summary { cursor: pointer; }
@@ -98,6 +97,13 @@ table.hist .tw { white-space: nowrap; }
 .badge.r-unknown { background: none; color: var(--muted); border: 1px solid var(--line); }
 .badge.esc { background: var(--esc-bg); color: var(--esc); margin-left: 4px; }
 .arrow { display: inline-block; width: 14px; color: var(--muted); }
+.card.now h3 { display: flex; align-items: center; gap: 10px; }
+.badge.s-running { background: #d9f2e1; color: #17612e; }
+.badge.s-not-running { background: var(--chip); color: var(--muted); }
+.badge.s-unknown { background: var(--warn-bg); color: var(--warn); }
+.badge.goal { background: #dde7fb; color: #1f4aa8; }
+.now-line { font-size: 14px; margin-top: 4px; }
+.card.now table { font-size: 14px; }
 </style>
 </head>
 <body>
@@ -106,7 +112,7 @@ table.hist .tw { white-space: nowrap; }
   <nav>
     <button class="active" data-tab="owner">Owner</button>
     <button data-tab="history">History</button>
-    <button disabled title="coming later">Pipelines status</button>
+    <button data-tab="now">Now</button>
   </nav>
   <span class="spacer"></span>
   <span class="muted small" id="refreshed"></span>
@@ -140,7 +146,10 @@ table.hist .tw { white-space: nowrap; }
       <tbody id="h-rows"></tbody>
     </table>
   </section>
-  <section class="tab" id="tab-status"><div class="placeholder">State of running pipelines - coming later.</div></section>
+  <section class="tab" id="tab-now">
+    <div class="summary" id="n-machine">Loading...</div>
+    <div id="n-cards"></div>
+  </section>
 </main>
 <script>
 "use strict";
@@ -557,16 +566,117 @@ async function loadHistory() {
   }
 }
 
+// ---- Now: the current state of the pipelines (cockpit-now N9); every text is set with textContent
+const NOW_REFRESH_MS = 10000;
+let nowLoading = false;
+
+function nowLine(label, value) {
+  return el("div", {cls: "now-line"}, [el("span", {cls: "muted", text: label + " "}), el("span", {text: value})]);
+}
+
+function nowSessions(c) {
+  const t = el("table", {}, [el("tr", {}, ["Team", "ID", "Title", "Phase", "Since", "For", ""].map(
+    function (h) { return el("th", {text: h}); }))]);
+  for (const s of c.running) {
+    t.appendChild(el("tr", {}, [
+      el("td", {text: s.team || "?"}), el("td", {cls: "tw small", text: s.handover || "—"}),
+      el("td", {text: s.handover ? (s.title || "unknown") : "—"}), el("td", {text: s.phase || "?"}),
+      el("td", {cls: "tw", text: local(s.start)}),
+      el("td", {cls: "tw", text: s.state === "running" ? dur(s.elapsed_s) : "-"}),
+      el("td", {cls: "small muted", text: s.state}),
+    ]));
+  }
+  return t;
+}
+
+function nowCard(c) {
+  const box = el("div", {cls: "card now"});
+  box.appendChild(el("h3", {}, [el("span", {text: c.name}),
+    el("span", {cls: "badge s-" + c.state.replace(/ /g, "-"), text: c.state})]));
+  if (c.message) box.appendChild(el("div", {cls: "banner warn", text: c.message}));
+  for (const i of c.instances || []) {
+    box.appendChild(nowLine("Instance", "since " + local(i.started) + " · PID " + (i.pid == null ? "?" : i.pid) +
+      " · " + plural(i.sessions, "session slot")));
+  }
+  if (c.state === "running") {
+    box.appendChild(c.goal ? el("div", {cls: "now-line"}, [el("span", {cls: "badge goal", text: "Goal run"}),
+      el("span", {text: " " + (c.goal.name || "?") + " since " + local(c.goal.started)})])
+      : nowLine("", "Regular run"));
+  }
+  if (c.running && c.running.length) {
+    box.appendChild(el("div", {cls: "now-line muted", text: c.state === "running" ?
+      "Sessions running now (" + c.running.length + ")" : "Interrupted sessions (" + c.running.length + ")"}));
+    box.appendChild(nowSessions(c));
+  } else if (c.state === "running") {
+    box.appendChild(nowLine("", "No session running now."));
+  }
+  if (c.log === "missing") box.appendChild(nowLine("", "No run log yet."));
+  if (c.last_event) box.appendChild(nowLine("Last event:", c.last_event.event + " at " + local(c.last_event.time)));
+  if (c.state === "not running") {
+    const s = c.last_session;
+    if (s) box.appendChild(nowLine("Last session:", (s.outcome || "?") + " at " + local(s.end) + " (" +
+      [s.team, s.handover, s.phase].filter(Boolean).join(", ") + ")"));
+    if (c.last_start) {
+      box.appendChild(nowLine("Last start:", local(c.last_start)));
+      box.appendChild(nowLine("Stop:", c.last_stop ? local(c.last_stop) : "not recorded"));
+    }
+    const g = c.last_goal;
+    if (g) box.appendChild(nowLine("Last goal run:", (g.name || "?") + ", " + (g.status === "running" ?
+      "not finished" : (g.status || "?")) + (g.ended ? ", ended " + local(g.ended) : "")));
+  }
+  if (c.hub_error) box.appendChild(el("div", {cls: "muted small", text: "Hub not readable, titles unknown: " +
+    c.hub_error}));
+  return box;
+}
+
+function renderNow(data) {
+  const m = data.machine;
+  let line = "Session slots " + m.slots_used + " / " + m.slots_limit + " · " +
+    plural(m.running, "pipeline") + " running";
+  if (m.other_instances) line += " · " + plural(m.other_instances, "other instance");
+  if (m.unknown_instances) line += " · " + plural(m.unknown_instances, "instance") + " unknown";
+  if (m.note) line += " · " + m.note;
+  document.getElementById("n-machine").textContent = line;
+  const cards = document.getElementById("n-cards");
+  cards.textContent = "";
+  if (!data.pipelines.length) cards.appendChild(el("div", {cls: "empty",
+    text: "No pipeline known yet: run one, or start the cockpit with --config."}));
+  for (const c of data.pipelines) cards.appendChild(nowCard(c));
+}
+
+async function loadNow() {
+  if (nowLoading) return;
+  nowLoading = true;
+  const btn = document.getElementById("refresh");
+  btn.disabled = true;
+  try {
+    const r = await api("GET", "/api/now");
+    if (r.status === 200) {
+      renderNow(r.data);
+      document.getElementById("refreshed").textContent = "updated " + new Date().toLocaleTimeString();
+    } else {
+      document.getElementById("refreshed").textContent = "refresh failed: " + (r.data.error || r.status);
+    }
+  } catch (e) {
+    document.getElementById("refreshed").textContent = "cockpit not reachable: " + e;
+  } finally {
+    nowLoading = false;
+    btn.disabled = false;
+  }
+}
+
 function showTab(name) {
   activeTab = name;
   for (const b of document.querySelectorAll("nav button[data-tab]")) {
     b.classList.toggle("active", b.dataset.tab === name);
   }
   for (const t of document.querySelectorAll("section.tab")) t.classList.toggle("active", t.id === "tab-" + name);
-  if (name === "history") loadHistory(); else load();
+  refreshActive();
 }
 
-function refreshActive() { if (activeTab === "history") loadHistory(); else load(); }
+function refreshActive() {
+  if (activeTab === "history") loadHistory(); else if (activeTab === "now") loadNow(); else load();
+}
 
 for (const b of document.querySelectorAll("nav button[data-tab]")) {
   b.addEventListener("click", function () { showTab(b.dataset.tab); });
@@ -580,7 +690,8 @@ for (const b of document.querySelectorAll("#h-periods button")) {
 }
 document.getElementById("h-pipeline").addEventListener("change", loadHistory);
 document.getElementById("refresh").addEventListener("click", refreshActive);
-setInterval(refreshActive, REFRESH_MS);
+setInterval(function () { if (activeTab !== "now") refreshActive(); }, REFRESH_MS);
+setInterval(function () { if (activeTab === "now") loadNow(); }, NOW_REFRESH_MS);
 load();
 </script>
 </body>

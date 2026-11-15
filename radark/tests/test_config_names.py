@@ -199,7 +199,9 @@ def test_default_run_directory_reaches_the_session(env, monkeypatch):
     temp = str((env.root / ".radark" / "tmp" / "app").resolve())
     system = argv[argv.index("--append-system-prompt") + 1]
     assert f"temporary files go to `{temp}`" in system
-    assert ".harness" not in json.dumps(argv)
+    # the test's own temporary directory may lie under a `.harness` folder of the machine running the suite
+    text = json.dumps(argv).replace(json.dumps(str(env.root))[1:-1], "<root>")
+    assert ".harness" not in text
 
 
 def test_status_reports_ambiguity_without_failing(env, capsys, monkeypatch):

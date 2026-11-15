@@ -406,7 +406,7 @@ def test_page_history_tab():
     nav = src[src.index("<nav>"):src.index("</nav>")]
     history = re.search(r"<button[^>]*>History</button>", nav).group(0)
     assert "disabled" not in history and 'data-tab="history"' in history
-    assert re.search(r"<button disabled[^>]*>Pipelines status</button>", nav)
+    assert "disabled" not in nav  # no tab is a placeholder any more (cockpit-now)
     for text in ("Last run", "Last 24 h", "Last 7 days", "All pipelines", "/api/history", "running since",
                  "escalated", "toLocaleString"):
         assert text in src
@@ -418,5 +418,5 @@ def test_page_history_tab():
 def test_page_served_has_the_history_tab(env, start):
     status, _, body = start().request("GET", "/")
     html = body.decode("utf-8")
-    assert status == 200 and 'id="tab-history"' in html and "coming later" in html
+    assert status == 200 and 'id="tab-history"' in html and "coming later" not in html
     assert "History of finished work - coming later" not in html
