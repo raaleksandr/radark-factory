@@ -76,7 +76,7 @@ invented IDs `HO-…`. Commits stay local: no push, tag, release or reinstall.
   `ho done` message. Nothing from the sandbox is committed.
 - [x] 4.4 Public-repository check: `git diff` of the change contains no owner path, product or company name, hub or
   run excerpt; IDs are invented.
-- [ ] 4.5 Commit locally (no push, tag, release or reinstall), `ho sync`, then
+- [x] 4.5 Commit locally (no push, tag, release or reinstall), `ho sync`, then
   `ho done HO-20261115-kgop -m "<commits, test counts, exact start command, decisions that differ from the
   handover (design Assumptions: D3 name key, D4 show bound, D5 env instead of --hub/--team, D8 python -m, D9 real ho
   on a temporary hub)>"` and `ho sync`. This is the last step of apply.
