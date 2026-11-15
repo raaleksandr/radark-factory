@@ -77,6 +77,27 @@ details.history summary { cursor: pointer; font-size: 13px; color: var(--muted);
 .result { font-size: 13px; margin-top: 6px; white-space: pre-wrap; }
 .result.ok { color: var(--ok); } .result.err { color: var(--err); } .result.warn { color: var(--warn); }
 .empty { color: var(--muted); padding: 6px 0 12px; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.filters select { font: inherit; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--text); }
+button.btn.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.summary { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px;
+  margin-bottom: 10px; }
+table.hist { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; font-size: 14px; }
+table.hist tr.row { cursor: pointer; }
+table.hist tr.row:hover { background: var(--chip); }
+table.hist tr.sessions > td { background: var(--bg); padding: 4px 14px 10px; }
+table.hist .tw { white-space: nowrap; }
+.badge { display: inline-block; border-radius: 10px; padding: 0 8px; font-size: 12px; font-weight: 600;
+  white-space: nowrap; }
+.badge.r-accepted { background: #d9f2e1; color: #17612e; }
+.badge.r-in-review { background: #dde7fb; color: #1f4aa8; }
+.badge.r-returned { background: #ffe8cc; color: #8a4b00; }
+.badge.r-open { background: var(--chip); color: var(--text); }
+.badge.r-declined { background: var(--err-bg); color: var(--err); }
+.badge.r-unknown { background: none; color: var(--muted); border: 1px solid var(--line); }
+.badge.esc { background: var(--esc-bg); color: var(--esc); margin-left: 4px; }
+.arrow { display: inline-block; width: 14px; color: var(--muted); }
 </style>
 </head>
 <body>
@@ -84,7 +105,7 @@ details.history summary { cursor: pointer; font-size: 13px; color: var(--muted);
   <h1>radark cockpit</h1>
   <nav>
     <button class="active" data-tab="owner">Owner</button>
-    <button disabled title="coming later">History</button>
+    <button data-tab="history">History</button>
     <button disabled title="coming later">Pipelines status</button>
   </nav>
   <span class="spacer"></span>
@@ -101,7 +122,24 @@ details.history summary { cursor: pointer; font-size: 13px; color: var(--muted);
     <div id="done"></div>
     <div id="done-more"></div>
   </section>
-  <section class="tab" id="tab-history"><div class="placeholder">History of finished work - coming later.</div></section>
+  <section class="tab" id="tab-history">
+    <div class="filters">
+      <select id="h-pipeline"><option value="">All pipelines</option></select>
+      <span id="h-periods">
+        <button class="btn on" data-period="last-run">Last run</button>
+        <button class="btn" data-period="24h">Last 24 h</button>
+        <button class="btn" data-period="7d">Last 7 days</button>
+        <button class="btn" data-period="all">All</button>
+      </span>
+    </div>
+    <div id="h-notes"></div>
+    <div class="summary" id="h-summary">Loading...</div>
+    <table class="hist">
+      <thead><tr><th></th><th>Pipeline</th><th>ID</th><th>Title</th><th>Team</th><th>First start</th><th>Last end</th>
+        <th>Total</th><th>Result</th></tr></thead>
+      <tbody id="h-rows"></tbody>
+    </table>
+  </section>
   <section class="tab" id="tab-status"><div class="placeholder">State of running pipelines - coming later.</div></section>
 </main>
 <script>
@@ -400,8 +438,149 @@ async function load() {
   }
 }
 
-document.getElementById("refresh").addEventListener("click", load);
-setInterval(load, REFRESH_MS);
+// ---- History of finished work (cockpit-history H8): every text is set with textContent
+const ARROW_OPEN = "▾", ARROW_SHUT = "▸";
+let activeTab = "owner";
+let histPeriod = "last-run";
+let histLoading = false;
+const histOpen = {};  // "pipeline|id" -> true for rows kept expanded across refreshes
+const histNames = [];
+
+function dur(s) {
+  if (s == null) return "-";
+  if (s < 60) return "< 1 min";
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h ? h + " h " + String(m).padStart(2, "0") + " min" : String(m).padStart(2, "0") + " min";
+}
+
+function local(iso) {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  return isNaN(d) ? String(iso) : d.toLocaleString();
+}
+
+function histSessions(r) {
+  const t = el("table", {}, [el("tr", {}, ["Phase", "Team", "Start", "End", "Duration", "Outcome", ""].map(
+    function (h) { return el("th", {text: h}); }))]);
+  for (const s of r.sessions) {
+    const counts = [];
+    if (s.denials) counts.push(s.denials + " denial" + (s.denials === 1 ? "" : "s"));
+    if (s.escalations) counts.push(s.escalations + " escalation" + (s.escalations === 1 ? "" : "s"));
+    t.appendChild(el("tr", {}, [
+      el("td", {text: s.phase || "?"}), el("td", {text: s.team || "?"}),
+      el("td", {cls: "tw", text: local(s.start)}),
+      el("td", {cls: "tw", text: s.running ? "running since " + local(s.start) : local(s.end)}),
+      el("td", {cls: "tw", text: s.running ? "-" : dur(s.duration_s)}),
+      el("td", {text: s.running ? "running" : (s.outcome || "?")}),
+      el("td", {cls: "small muted", text: counts.join(", ")}),
+    ]));
+  }
+  return t;
+}
+
+function histRow(r, body) {
+  const key = r.pipeline + "|" + r.id;
+  const arrow = el("span", {cls: "arrow", text: histOpen[key] ? ARROW_OPEN : ARROW_SHUT});
+  const result = el("td", {}, [el("span", {cls: "badge r-" + r.result.replace(/ /g, "-"), text: r.result})]);
+  if (r.escalated) result.appendChild(el("span", {cls: "badge esc", text: "escalated"}));
+  const row = el("tr", {cls: "row"}, [
+    el("td", {}, [arrow]), el("td", {text: r.pipeline}), el("td", {cls: "tw small", text: r.id}),
+    el("td", {text: r.title}), el("td", {text: r.teams.join(", ")}),
+    el("td", {cls: "tw", text: local(r.first_start)}),
+    el("td", {cls: "tw", text: r.running && !r.last_end ? "running" : local(r.last_end)}),
+    el("td", {cls: "tw", text: "working " + dur(r.working_s) + " / wall " + dur(r.wall_s)}),
+    result,
+  ]);
+  const detail = el("tr", {cls: "sessions"}, [el("td", {colspan: "9"}, [histSessions(r)])]);
+  detail.hidden = !histOpen[key];
+  row.addEventListener("click", function () {
+    histOpen[key] = !histOpen[key];
+    detail.hidden = !histOpen[key];
+    arrow.textContent = histOpen[key] ? ARROW_OPEN : ARROW_SHUT;
+  });
+  body.appendChild(row);
+  body.appendChild(detail);
+}
+
+function plural(n, word) { return n + " " + word + (n === 1 ? "" : "s"); }
+
+function renderHistory(data) {
+  const select = document.getElementById("h-pipeline");
+  for (const p of data.pipelines || []) {
+    if (histNames.indexOf(p.name) < 0) {
+      histNames.push(p.name);
+      select.appendChild(el("option", {value: p.name, text: p.name}));
+    }
+  }
+  const notes = document.getElementById("h-notes");
+  notes.textContent = "";
+  for (const p of data.pipelines || []) {
+    if (p.hub_error) notes.appendChild(el("div", {cls: "banner warn",
+      text: "Hub of " + p.name + " could not be read (results unknown): " + p.hub_error}));
+    if (p.log === "missing") notes.appendChild(el("div", {cls: "muted small", text: p.name + ": no run log yet."}));
+    if (p.log === "error") notes.appendChild(el("div", {cls: "banner err", text: p.name + ": run log not readable."}));
+    if (p.skipped) notes.appendChild(el("div", {cls: "muted small",
+      text: p.name + ": " + plural(p.skipped, "unreadable run log line") + " skipped."}));
+  }
+  const s = data.summary;
+  document.getElementById("h-summary").textContent = plural(s.handovers, "handover") + ", " +
+    plural(s.sessions, "session") + ", working " + dur(s.working_s) + ", " + s.accepted + " accepted; " +
+    plural(s.other_sessions, "session") + " without a handover, " + dur(s.other_s);
+  const body = document.getElementById("h-rows");
+  body.textContent = "";
+  if (!data.rows.length) body.appendChild(el("tr", {}, [el("td", {colspan: "9", cls: "empty",
+    text: "No work in this period."})]));
+  for (const r of data.rows) histRow(r, body);
+}
+
+async function loadHistory() {
+  if (histLoading) return;
+  histLoading = true;
+  const btn = document.getElementById("refresh");
+  btn.disabled = true;
+  const pipe = document.getElementById("h-pipeline").value;
+  let path = "/api/history?period=" + encodeURIComponent(histPeriod);
+  if (pipe) path += "&pipeline=" + encodeURIComponent(pipe);
+  try {
+    const r = await api("GET", path);
+    if (r.status === 200) {
+      renderHistory(r.data);
+      document.getElementById("refreshed").textContent = "updated " + new Date().toLocaleTimeString();
+    } else {
+      document.getElementById("refreshed").textContent = "refresh failed: " + (r.data.error || r.status);
+    }
+  } catch (e) {
+    document.getElementById("refreshed").textContent = "cockpit not reachable: " + e;
+  } finally {
+    histLoading = false;
+    btn.disabled = false;
+  }
+}
+
+function showTab(name) {
+  activeTab = name;
+  for (const b of document.querySelectorAll("nav button[data-tab]")) {
+    b.classList.toggle("active", b.dataset.tab === name);
+  }
+  for (const t of document.querySelectorAll("section.tab")) t.classList.toggle("active", t.id === "tab-" + name);
+  if (name === "history") loadHistory(); else load();
+}
+
+function refreshActive() { if (activeTab === "history") loadHistory(); else load(); }
+
+for (const b of document.querySelectorAll("nav button[data-tab]")) {
+  b.addEventListener("click", function () { showTab(b.dataset.tab); });
+}
+for (const b of document.querySelectorAll("#h-periods button")) {
+  b.addEventListener("click", function () {
+    histPeriod = b.dataset.period;
+    for (const x of document.querySelectorAll("#h-periods button")) x.classList.toggle("on", x === b);
+    loadHistory();
+  });
+}
+document.getElementById("h-pipeline").addEventListener("change", loadHistory);
+document.getElementById("refresh").addEventListener("click", refreshActive);
+setInterval(refreshActive, REFRESH_MS);
 load();
 </script>
 </body>

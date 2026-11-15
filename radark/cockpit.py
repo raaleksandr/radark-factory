@@ -4,7 +4,9 @@ in the hubs of all known pipelines and answers short ones through `ho`.
 A threaded `http.server` on 127.0.0.1 only; the page (`cockpit_page.html`) is one self-contained document. Reads
 are `ho list --to <owner> --status all` and `ho show`, answers `ho respond|done|ack|decline <ID> --body -` followed
 by `ho sync`, all as the owner team through `hub.Hub`, after the same `ho` contract check the engine uses. The
-server never writes a hub file; the only file it changes is the machine-wide pipeline registry."""
+server never writes a hub file; the only file it changes is the machine-wide pipeline registry. The History tab
+(`GET /api/history`, change cockpit-history) reads each pipeline's `runs.jsonl` and `ho list --status all` through
+`cockpit_history`."""
 from __future__ import annotations
 
 import hashlib
@@ -21,6 +23,7 @@ from importlib import resources
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from . import cockpit_history as history_mod
 from . import config as config_mod
 from . import machine as machine_mod
 from .hub import OWNER_ACTIONS, Hub, HoError, HoLifecycleError, HoVersion, check_ho
@@ -88,11 +91,18 @@ class Cockpit:
         self._check_lock = threading.Lock()
         self._write_locks: dict[str, threading.Lock] = {}
         self._locks_lock = threading.Lock()
+        self.logs = history_mod.LogCache()
 
     # ---- pipelines (design D3, D4.1)
 
     def pipelines(self) -> tuple[list[dict], list[Group], str | None]:
         """(pipeline entries for the page, hub groups, a registry problem line or None)."""
+        out, groups, problem, _ = self._load()
+        return out, groups, problem
+
+    def _load(self) -> tuple[list[dict], list[Group], str | None, list[tuple[dict, Group, Path]]]:
+        """`pipelines()` plus, for each readable pipeline, (entry, its group, its run directory) for the history
+        (cockpit-history H1); the run directory never goes to the page."""
         entries, problem = self.registry.read()
         paths = {}
         for e in entries:
@@ -101,7 +111,7 @@ class Cockpit:
             key = machine_mod.norm(c)
             old = paths.get(key)
             paths[key] = (c, old[1] if old else None, bool(old))
-        out, groups = [], {}
+        out, groups, loaded = [], {}, []
         for path, name, registered in paths.values():
             entry = {"config": path, "name": name or Path(path).parent.name, "registered": registered}
             if not Path(path).is_file():
@@ -118,7 +128,8 @@ class Cockpit:
             if entry["name"] not in group.names:
                 group.names.append(entry["name"])
             out.append(entry)
-        return out, list(groups.values()), problem
+            loaded.append((entry, group, cfg.run_dir))
+        return out, list(groups.values()), problem, loaded
 
     def group(self, key: str) -> Group | None:
         return next((g for g in self.pipelines()[1] if g.key == key), None)
@@ -212,6 +223,34 @@ class Cockpit:
         except HoError as exc:
             return 502, {"ok": False, "error": str(exc)}
         return 200, {"ok": True, "item": self._with_show(group, self._summary(group, shown), shown)}
+
+    # ---- history (cockpit-history H5, H7)
+
+    def history(self, pipeline: str | None = None, period: str = history_mod.DEFAULT_PERIOD, now=None) -> dict:
+        """The History of finished work: each pipeline's run log, and each hub read once with `ho list --status
+        all` (in parallel, after the contract check). Read only: no `ho` write, no file written."""
+        _, _, _, loaded = self._load()
+        if pipeline is not None:
+            loaded = [x for x in loaded if x[0]["name"] == pipeline]
+        hubs: dict[str, Group] = {}
+        for _, group, _ in loaded:
+            hubs.setdefault(machine_mod.norm(group.hub), group)
+        keys = list(hubs)
+        with ThreadPoolExecutor(max_workers=max(1, len(keys))) as pool:
+            lists = dict(zip(keys, pool.map(lambda k: self._list_all(hubs[k]), keys)))
+        inputs = []
+        for entry, group, run_dir in loaded:
+            items, error = lists[machine_mod.norm(group.hub)]
+            inputs.append(history_mod.PipelineInput(entry["name"], self.logs.read(Path(run_dir) / "runs.jsonl"),
+                                                    items, error))
+        return history_mod.history(inputs, period, pipeline, now)
+
+    def _list_all(self, group: Group) -> tuple[dict[str, dict] | None, str | None]:
+        try:
+            listed = self._hub(group).all_handovers(group.owner_team)
+        except HoError as exc:
+            return None, str(exc)
+        return {h["id"]: h for h in listed if isinstance(h, dict) and isinstance(h.get("id"), str)}, None
 
     # ---- answers (design D5)
 
@@ -334,6 +373,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"app": APP, "version": version(), "pid": os.getpid()})
             if url.path == "/api/items":
                 return self._json(200, self.server.cockpit.items())
+            if url.path == "/api/history":
+                period = query.get("period", history_mod.DEFAULT_PERIOD)
+                if period not in history_mod.PERIODS:
+                    return self._json(400, {"ok": False, "error": "unknown period",
+                                            "allowed": list(history_mod.PERIODS)})
+                return self._json(200, self.server.cockpit.history(query.get("pipeline") or None, period))
             if url.path == "/api/item":
                 code, data = self.server.cockpit.item(query.get("hub_key", ""), query.get("id", ""))
                 return self._json(code, data)

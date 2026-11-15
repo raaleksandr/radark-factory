@@ -14,6 +14,7 @@ with nothing on stdout (an ho too old for the flag); another dict -> printed as 
 as is (not JSON).
 `list --to <team>` (owner cockpit) answers "list:to:<team>" when present, else every "show:*" entry whose `to` has
 the team, with `my_state` from its `recipients` (default "pending"); without `--status all` closed ones are left out.
+`list` without `--to` / `--from` (cockpit history) answers "list:all" when present, else every "show:*" entry.
 `ack` / `done` are writes like `respond`. A handover with `recipients` (cockpit tests) also gets the acting team's
 new state, status "resolved" when every recipient has finished, and new `allowed_actions`.
 Every call (and a stdin body) is appended to FAKE_HO_DATA + ".calls"."""
@@ -27,11 +28,29 @@ args = [a for a in sys.argv[1:] if a != "--json"]
 path = os.environ["FAKE_HO_DATA"]
 team = os.environ.get("HO_TEAM")
 stdin = sys.stdin.buffer.read().decode("utf-8") if "--body" in args and args[args.index("--body") + 1] == "-" else None
-with open(path + ".calls", "a", encoding="utf-8") as fh:
-    call = {"args": args, "team": team, "hub": os.environ.get("HO_HUB")}
-    if stdin is not None:
-        call["stdin"] = stdin
-    fh.write(json.dumps(call) + "\n")
+call = {"args": args, "team": team, "hub": os.environ.get("HO_HUB")}
+if stdin is not None:
+    call["stdin"] = stdin
+# Parallel fakes (the cockpit runs `show` in threads) append under a lock: on Windows an append is a seek and a
+# write, and two processes could overwrite each other's line.
+with open(path + ".calls-lock", "a+b") as lock:
+    if os.name == "nt":
+        import msvcrt
+        lock.seek(0)
+        while True:
+            try:
+                msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+                break
+            except OSError:
+                pass
+    else:
+        import fcntl
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    with open(path + ".calls", "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(call) + "\n")
+    if os.name == "nt":
+        lock.seek(0)
+        msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
 with open(path, encoding="utf-8") as fh:
     data = json.load(fh)
 
@@ -152,8 +171,14 @@ elif cmd == "list" and "--to" in args:
                 items.append({**summary(h), "my_state": (h.get("recipients") or {}).get(to, "pending")})
         data[key] = {"items": items}
     default = {"items": []}
-elif cmd == "list":
+elif cmd == "list" and "--from" in args:
     key, default = f"list:{args[args.index('--from') + 1]}", {"items": []}
+elif cmd == "list":
+    key = "list:all"
+    if key not in data:
+        data[key] = {"items": [summary(h) for k, h in data.items() if k.startswith("show:") and isinstance(h, dict)
+                               and (opt("--status") == "all" or h.get("status") != "closed")]}
+    default = {"items": []}
 else:
     key, default = cmd, {"exit": 1, "error": {"code": "usage", "message": f"fake ho: {cmd} unsupported"}}
 value = data.get(key, default)

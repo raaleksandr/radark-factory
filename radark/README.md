@@ -295,6 +295,18 @@ python -m radark keep <ID> [--team <id>] [--off]        # next phases resume the
 python -m radark cockpit [--port N] [--config FILE]... [--no-browser] [--forget FILE]   # the owner's local page (README "Cockpit")
 ```
 
+**Cockpit server** (`radark/cockpit.py`, page `radark/cockpit_page.html`, History in `radark/cockpit_history.py`):
+`GET /` (the page), `GET /api/health`, `GET /api/items` (owner items), `GET /api/item?hub_key=&id=` (one item with
+its text), `GET /api/history?pipeline=<name>&period=last-run|24h|7d|all` (the History; default `last-run`, any other
+period is refused with 400; JSON `period`, `pipeline`, `now`, `pipelines[]` (name, log `ok | missing | error`,
+skipped lines, since, hub_error), `summary` (handovers, sessions, working_s, accepted, other_sessions, other_s),
+`rows[]` (pipeline, id, title, teams, first_start, last_end, working_s, wall_s, result, escalated, running,
+sessions[]: phase, team, start, end, duration_s, outcome, running, denials, escalations, session); no path, prompt or
+session result text), `POST /api/action`, `POST /api/forget`. In the History a `session_end` closes the oldest open
+`session_start` of the same team, handover and phase; `interrupted` and a later `dispatcher_start` close open sessions;
+lines that are not JSON objects (a half-written last line) are skipped; parsed logs are reused while a file's size
+and modification time are unchanged.
+
 **Plan:** `plan` predicts the order of the next steps; `dry-run` shows the first one in detail (prompt included).
 It reads the same snapshot as `dry-run` (inboxes, `ho show`, state records, holds, owner answers, carried goal
 guidance), picks every step with the real selection rule, and after each step assumes its successful outcome on an
@@ -866,7 +878,9 @@ max_sessions, max_hours), `goal_guidance_carried` (path, recovered `stored | has
 Start check: `ho --version --json` (see **Compatibility of `ho`**).
 
 Read commands: `ho inbox --json`, `ho show <ID> --json`, `ho list --from <team> --status all --json`,
-`ho teams --json` (owner team check), with `HO_HUB` and `HO_TEAM` in the environment.
+`ho teams --json` (owner team check), with `HO_HUB` and `HO_TEAM` in the environment. The cockpit also reads
+`ho list --to <owner team> --status all --json` (owner items) and `ho list --status all --json` as the owner team
+(History: `id`, `title`, `status`, `expects`, `recipients` of every handover, archived ones included).
 
 Write commands (escalation handovers only; team handovers are never changed):
 `HO_TEAM=<escalated team> ho new --to <owner_team> --expects response --auto-close --tag escalation --ref <item>

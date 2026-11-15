@@ -220,6 +220,10 @@ class Hub:
         """Every handover addressed to `team`, any status, with `my_state` for `team`."""
         return self._run(["list", "--to", team, "--status", "all"], team=team).get("items", [])
 
+    def all_handovers(self, team: str) -> list[dict]:
+        """Every handover of the hub, any status, listed as `team` (any registered team may list)."""
+        return self._run(["list", "--status", "all"], team=team).get("items", [])
+
     def act(self, action: str, handover_id: str, team: str, body: str = "") -> dict:
         """`ho respond|done|ack|decline <ID> --body -` as `team`; an empty body for `done` / `ack` sends none."""
         if action not in OWNER_ACTIONS:

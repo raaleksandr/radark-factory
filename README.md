@@ -95,7 +95,19 @@ with the pipeline name(s), sender, times, title, tags (an `escalation` badge), `
 A short answer is given right on the page: only the actions `ho show` allows for the owner (`respond`, `done` with an
 optional note, `ack`, `decline` with a reason), run through `ho` as the owner team, followed by `ho sync`. Files to
 place or code to change are handled outside the cockpit, as each item's note says. The page refreshes every 30 s and
-on "Refresh"; the "History" and "Pipelines status" tabs are reserved for later.
+on "Refresh"; the "Pipelines status" tab is reserved for later.
+
+The **History** tab lists the work the pipelines did: one row per handover per pipeline (two pipelines on one hub
+keep their own rows), newest first, with the pipeline, ID, title, team(s), first session start, last session end,
+two totals (working time, the sum of the session durations, and wall time, from the first start to the last end,
+as `1 h 05 min`), the result (accepted, in review, returned, open, declined, or unknown when the hub does not know
+the handover or cannot be read) and an `escalated` badge. A row expands to its sessions in time order (phase, start,
+end, duration, outcome, denials and escalations; "running since ..." for a session still running). Filters: a
+pipeline (or all) and a period (**Last run**, for each pipeline since its latest dispatcher start; **Last 24 h**;
+**Last 7 days**; **All**); a handover is listed when one of its sessions overlaps the period. A summary line counts
+the handovers, sessions, working time and accepted ones, and the sessions without a handover (goal checks, idle
+asks). The History reads each pipeline's run log (`runs.jsonl` in its run directory) and each hub once per refresh
+with `ho list --status all`; it changes nothing. Times are shown in the browser's time zone.
 
 ```
 npm run cockpit                       # in this repository: the same as python -m radark cockpit
