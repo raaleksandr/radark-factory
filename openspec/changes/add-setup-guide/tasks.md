@@ -46,7 +46,7 @@
 ## 4. Report
 
 - [x] 4.1 Commit locally (no push, tag, release or reinstall).
-- [ ] 4.2 `ho done HO-20261117-d7uw -m "<summary: guide location, steps run literally and their result, sandbox
+- [x] 4.2 `ho done HO-20261117-d7uw -m "<summary: guide location, steps run literally and their result, sandbox
       invocation, test result, any gap for product>"`; `ho sync`.
 
 ## Apply notes (2026-11-17)
