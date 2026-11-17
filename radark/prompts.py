@@ -249,6 +249,29 @@ def wrap_up_message(c: Candidate, minutes: int, extensions: int, grace: float, i
     return _with_rule(text, goal, rule=p.render("standing-rule", values))
 
 
+def end_time_wrap_up_message(c: Candidate, until: str, grace: float, index_lock: bool = False,
+                             goal: str | None = None, profile: Profile | None = None) -> str:
+    """Resumes a work session stopped at a strict end time and asks it to wrap up within `grace` minutes
+    (strict-end-time D4). Unlike the time-limit wrap-up it does not hand the rest back: the next run resumes it."""
+    text = (
+        f"The run's end time {until} was reached and the dispatcher stopped this session in the {c.phase} phase of "
+        f"handover {c.handover}. You now have {grace:g} min to wrap up; after that the session is stopped. The step "
+        "that was running was cut off: the working tree may hold a partial edit, and an interrupted git command may "
+        "have left a stale `.git/index.lock`" + (" (one exists now)" if index_lock else "")
+        + ". Check `git status` and your last step first: finish the partial step only if it is quick, otherwise undo "
+        "it (remove the lock only if no git process is running). Start no new work. Commit what works. "
+    )
+    if c.phase == "apply":
+        text += ("Check off the finished tasks in the change's `tasks.md` and write the open ones under a "
+                 "`Left for a later run` note there. ")
+    else:
+        text += "Say what is left on a line starting `Left:` in your final message. "
+    text += (f"Do not report handover {c.handover} as done unless the phase is complete; the next run resumes this "
+             "session where you stop.")
+    p = _profile(profile)
+    return _with_rule(text, goal, rule=p.render("standing-rule", template_values(c, p)))
+
+
 TIMEOUT_LABELS ={"idle_timeout": "the inactivity limit (no output for too long)",
                   "max_time": "the maximum session duration"}
 
@@ -259,6 +282,8 @@ INTERRUPT_LABELS = {
     "owner": "The owner stopped the dispatcher, and with it this session",
     "dispatcher_stopped": "The dispatcher stopped while this session ran (its window was closed, or the computer "
                           "restarted)",
+    "end_time": "The previous run reached its end time and the dispatcher stopped this session (it may have wrapped "
+                "up: see your last messages and tasks.md)",
 }
 
 

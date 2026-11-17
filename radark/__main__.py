@@ -31,7 +31,7 @@ from . import workflow
 from .awake import FORMS as KEEP_AWAKE_FORMS, KeepAwake, Keeper, cover_end_time, parse_keep_awake, wanted
 from .clock import Sleep, SleepWatch, awake, parse_until
 from .hub import Hub, HoError, check_ho, hub_lock_message
-from .runner import WRAP_UP, Runner, SessionResult, kill_pid_tree
+from .runner import END_TIME, STOP, WRAP_UP, Runner, SessionResult, kill_pid_tree
 from .state import GoalRun, RunLog, State, now_ts, read_goal, write_json_atomic
 from .workflow import branch_heads, commits_outside, git_out, new_commits  # noqa: F401 (moved; kept importable)
 
@@ -195,6 +195,8 @@ class Dispatcher:
         self.goal: GoalRun | None = None
         self.budget: dict[str, int] = {}  # usage budget of this run per window, from the options; never stored
         self.until: float | None = None  # end time of this run (epoch seconds), from `--until`; never stored
+        self.until_strict = False  # running sessions end by the end time + wrap-up grace (strict-end-time D1)
+        self._end_hint = False  # the default mode's hint was printed in this run (strict-end-time D6)
         self.keep_awake: KeepAwake = cfg.keep_awake  # `--keep-awake` replaces it for the run; never stored
         self.keeper: Keeper | None = None  # the thread that holds the Windows request (keep-awake D4)
         self.watch = watch or SleepWatch()
@@ -464,6 +466,7 @@ class Dispatcher:
 
         on_deadline, on_abort = (self.limit_watch(team, handover, title, since, base) if work and not wrap_up
                                  else (None, None))
+        end_at, on_end_at = self.end_watch(work and not wrap_up)
         here = threading.current_thread() is threading.main_thread() and not self._parallel
         old = signal.signal(signal.SIGINT, self._on_interrupt) if here else None
         try:
@@ -471,7 +474,8 @@ class Dispatcher:
                 r = runner.run(team, prompt, phase=phase, handover=handover, resume=resume, tools=tools,
                                json_schema=json_schema, timeout_s=self.cfg.wrap_up_minutes * 60 if wrap_up else None,
                                on_usage=self.usage_watch(team, handover), on_start=on_start,
-                               sleep_check=sleep_check, on_deadline=on_deadline, on_deadline_abort=on_abort)
+                               sleep_check=sleep_check, on_deadline=on_deadline, on_deadline_abort=on_abort,
+                               end_at=end_at, on_end_at=on_end_at)
         finally:
             if here:
                 signal.signal(signal.SIGINT, old)
@@ -517,6 +521,16 @@ class Dispatcher:
                            elapsed_s=r.duration_s, extensions_used=n, grace_min=grace)
             self.problem(f"{what}: time limit after {duration_text(r.duration_s)}, {n} extension"
                          f"{'' if n == 1 else 's'} used; asking the session to wrap up within {grace:g} min")
+        end_stop = work and not wrap_up and r.interrupt_cause == END_TIME  # strict-end-time D4
+        end_wrap = end_stop and self.cfg.wrap_up_minutes > 0 and time.time() < self.until + self.end_grace_s()
+        if end_stop:
+            grace = self.cfg.wrap_up_minutes
+            self.log.write("end_time_stop", team=team, handover=handover, phase=phase, session=r.session_id,
+                           elapsed_s=r.duration_s, until=local_iso(self.until), grace_min=grace)
+            at = day_clock(self.until, time.time())
+            self.problem(f"{what}: end time {at} reached; asking the session to wrap up within {grace:g} min"
+                         if end_wrap else f"{what}: end time {at} reached; the session is stopped")
+        stopped = stopped or end_wrap
         if self._cleanup_pending and not stopped:  # a wrapped-up session counts once its wrap-up ends (D2, D7)
             self.ended_goal_given(team, r)
         self.log.write("session_end", team=team, handover=handover, phase=phase, session=r.session_id,
@@ -556,9 +570,67 @@ class Dispatcher:
             self.state.save()
         if work and not wrap_up and r.timeout_reason in TIME_LIMIT:  # wrap-up W6.2: a cut work session
             self.time_limit_entry(rec, r, phase, "cut", r.timeout_reason, r.outcome)
+        if end_wrap:
+            return self.end_time_wrap_up(team, phase, handover, r, since, title)
         if stopped:
             return self.wrap_up(team, phase, handover, r, since, title)
         return r
+
+    # ---- strict end time (strict-end-time)
+
+    def end_grace_s(self) -> float:
+        return self.cfg.wrap_up_minutes * 60
+
+    def end_watch(self, first: bool):
+        """`(end_at, on_end_at)` for a session (design D3, D6): strict, a work session that is not a wrap-up
+        (`first`) is stopped at the end time, every other session at the end time plus the grace period; not strict,
+        every session reports the end time passing (the hint). `(None, None)` without an end time."""
+        if self.until is None:
+            return None, None
+        if not self.until_strict:
+            return self.until, self.end_time_passed
+        return (self.until if first else self.until + self.end_grace_s()), (lambda r: STOP)
+
+    def end_time_passed(self, r: SessionResult) -> None:
+        """The default mode's hint, once per run, when the end time passes while a session runs (design D6)."""
+        with self.lock:
+            if self._end_hint:
+                return None
+            self._end_hint = True
+            running = max(1, len(self._sessions))
+            self.log.write("end_time_passed", until=local_iso(self.until), sessions_running=running)
+            what = "the running session finishes" if running == 1 else "the running sessions finish"
+            self.out(f"Note: the end time {day_clock(self.until, time.time())} has passed; {what}. "
+                     "To end on time, use --until-strict.")
+        return None
+
+    def end_time_wrap_up(self, team: str, phase: str, handover: str, r: SessionResult, since: str | None,
+                         title: str | None) -> SessionResult:
+        """Resume a work session stopped at a strict end time with the end-time wrap-up prompt (design D4); its
+        result is the step's result: `interrupted` / `end_time` unless the wrap-up ended normally with the phase
+        complete, or ended in a usage limit or an owner wait."""
+        rec = self.state.get(handover) or {}
+        cand = sel.Candidate(kind="work", team=team, handover=handover, title=title or rec.get("title") or "",
+                             phase=phase, recency="", team_index=0, change=rec.get("change"))
+        lock = self.cfg.team(team).repo / ".git" / "index.lock"
+        message = prompts.end_time_wrap_up_message(cand, day_clock(self.until, time.time()), self.cfg.wrap_up_minutes,
+                                                   lock.is_file(), self.goal_for(team), self.profile(team))
+        start = since or r.started
+        w = self.session(team, message, phase, handover, resume=r.session_id, since=start, title=title,
+                         step="end-time wrap-up", wrap_up=True)
+        keep = w.outcome in ("usage_limit", "waiting_for_owner") or (
+            normal_end(w) and w.outcome != "error" and self.phase_complete(cand, rec, w, start))
+        if not keep:
+            w.outcome, w.interrupt_cause = "interrupted", END_TIME
+            for s in (self.state.get(handover) or rec).get("sessions", []):
+                if s.get("id") == w.session_id and s.get("started") == w.started:
+                    s["outcome"] = w.outcome
+            self.state.save()
+        self.log.write("end_time_wrap_up", team=team, handover=handover, phase=phase, session=r.session_id,
+                       elapsed_s=r.duration_s, until=local_iso(self.until), grace_min=self.cfg.wrap_up_minutes,
+                       wrap_up_session=w.session_id, outcome=w.outcome, interrupt_cause=w.interrupt_cause,
+                       duration_s=w.duration_s)
+        return w
 
     def wrap_up(self, team: str, phase: str, handover: str, r: SessionResult, since: str | None,
                 title: str | None) -> SessionResult:
@@ -1059,6 +1131,8 @@ class Dispatcher:
 
         def deadline(r: SessionResult, elapsed: float) -> float | str | None:
             r.extensions_used = used[0]
+            if self.until_strict and self.until is not None and time.time() >= self.until:
+                return WRAP_UP if wrap else None  # no limit check, no extension after a strict end time (D5)
             if used[0] >= checks:  # no extension left: wrap up, or end at the deadline without a check
                 return WRAP_UP if wrap else None
             rec = self.state.get(handover)
@@ -1099,7 +1173,8 @@ class Dispatcher:
         with self.lock.released():
             c = runner.run(check_team, prompts.limit_check_prompt(digest, self.goal.text if self.goal else None),
                            phase="limit_check", handover=r.handover, tools=CONSULT_TOOLS,
-                           json_schema=prompts.LIMIT_SCHEMA, timeout_s=self.cfg.limit_check_minutes * 60)
+                           json_schema=prompts.LIMIT_SCHEMA, timeout_s=self.cfg.limit_check_minutes * 60,
+                           **dict(zip(("end_at", "on_end_at"), self.end_watch(False))))
         ignored = aborted.is_set()
         verdict = None if ignored or c.outcome != "finished" else parse_limit_verdict(c)
         extension = (self.cfg.limit_check_minutes if verdict and verdict["verdict"] == "progressing" else None)
@@ -1357,7 +1432,8 @@ class Dispatcher:
         self.goal = goal
         self.log.write("goal_start", path=str(goal.path), goal=goal.text, hash=goal.hash,
                        max_sessions=goal.max_sessions, max_hours=goal.max_hours, budget=self.budget,
-                       until=local_iso(self.until), keep_awake=self.keep_awake.text)
+                       until=local_iso(self.until), until_strict=self.until_strict,
+                       keep_awake=self.keep_awake.text)
         self.out(f"Goal run: {goal.path} (at most {goal.max_sessions} sessions, {goal.max_hours:g} h)")
         if carried:
             self.log.write("goal_guidance_carried", path=str(goal.path), recovered=carried,
@@ -1715,8 +1791,19 @@ class Dispatcher:
         """Console line and log record for the run's end time (design D5)."""
         if self.until is None:
             return
-        self.log.write("run_until", until=local_iso(self.until))
-        self.out(f"Run ends at {until_text(self.until)}")
+        self.log.write("run_until", until=local_iso(self.until), strict=self.until_strict)
+        self.out(f"Run ends at {until_text(self.until)} {self.until_mode()}")
+
+    def until_mode(self) -> str:
+        """`(strict: running sessions wrap up at 12:00, stopped by 12:15)`, `(strict: running sessions stop at
+        12:00)` without a grace period, or `(running sessions finish first)` (strict-end-time D7)."""
+        at = dt.datetime.fromtimestamp(self.until)
+        if not self.until_strict:
+            return "(running sessions finish first)"
+        if self.end_grace_s() <= 0:
+            return f"(strict: running sessions stop at {at:%H:%M})"
+        by = dt.datetime.fromtimestamp(self.until + self.end_grace_s())
+        return f"(strict: running sessions wrap up at {at:%H:%M}, stopped by {by:%H:%M})"
 
     def until_end(self) -> int | None:
         """End the run once its wall-clock end time is reached, sleep counted (design D2, D3); None to go on."""
@@ -2187,7 +2274,7 @@ STEP_KIND = {"goal": "goal check", "idle": "idle ask", "consult": "triage consul
              "limit_check": "limit check"}
 TIME_LIMIT = {"idle_timeout": "idle time limit", "max_time": "time limit"}
 INTERRUPT_CAUSE = {"sleep": "computer slept", "owner": "owner", "dispatcher_stopped": "dispatcher stopped",
-                   WRAP_UP: "asked to wrap up"}
+                   WRAP_UP: "asked to wrap up", END_TIME: "end time"}
 
 
 def utf8_console() -> bool:
@@ -2735,7 +2822,7 @@ def dry_run(d: Dispatcher) -> int:
     for line in usage_report(d):
         print(line)
     if d.until is not None:
-        print(f"Would end: {until_text(d.until)}")
+        print(f"Would end: {until_text(d.until)} {d.until_mode()}")
     if d.keep_awake.mode != "off":
         print(f"Would keep awake: {keep_awake_text(d.keep_awake, until=d.until)}")
     owner = d.cfg.owner_team
@@ -2948,6 +3035,10 @@ def main(argv=None) -> int:
         parser.add_argument("--until", metavar="WHEN",
                             help="this run only: start no new step from WHEN on, HH:MM (next such time) or "
                                  "YYYY-MM-DD HH:MM, local wall-clock time (sleep of the computer counts)")
+        parser.add_argument("--until-strict", action=argparse.BooleanOptionalAction, default=None,
+                            help="this run only: at the --until end time stop running sessions too: a work session "
+                                 "wraps up within [loop] wrap_up_minutes, then is stopped; no extension after the end "
+                                 "time (--no-until-strict turns a configured [loop] until_strict off)")
         parser.add_argument("--keep-awake", nargs="?", const="on", metavar="WHEN",
                             help="this run only: keep the computer from sleeping on its own: off, on (the bare flag), "
                                  "until HH:MM / YYYY-MM-DD HH:MM, or daily HH:MM-HH:MM (replaces [loop] keep_awake)")
@@ -3007,6 +3098,11 @@ def main(argv=None) -> int:
                   file=sys.stderr)
             return 2
         until = at.timestamp()
+    strict = getattr(args, "until_strict", None)
+    if strict is not None and until is None:  # strict-end-time D1: the flag alone would do nothing
+        flag = "--until-strict" if strict else "--no-until-strict"
+        print(f"{flag} needs --until (an end time); without --until the run has no end time.", file=sys.stderr)
+        return 2
     keep_awake = None
     if getattr(args, "keep_awake", None) is not None:
         keep_awake = parse_keep_awake(args.keep_awake, dt.datetime.now())
@@ -3028,6 +3124,7 @@ def main(argv=None) -> int:
     d = Dispatcher(cfg)
     d.budget = budget
     d.until = until
+    d.until_strict = until is not None and (cfg.until_strict if strict is None else strict)
     if keep_awake is not None:
         d.keep_awake = keep_awake
     d.keep_awake = cover_end_time(d.keep_awake, until)  # a moment at or after the end time: the whole run

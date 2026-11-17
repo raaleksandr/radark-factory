@@ -27,6 +27,8 @@ TEXT_CHARS, TOOL_CHARS = 300, 150
 GUARDED_TOOLS = ("Bash", "PowerShell", "Write", "Edit")  # the guard hook's matchers (fewer-owner-waits D1)
 TEMP_VARS = ("TEMP", "TMP", "TMPDIR")  # point to the session temp directory (fewer-owner-waits D5)
 WRAP_UP = "wrap_up"  # `on_deadline` answer: stop the session and resume it with a wrap-up prompt (wrap-up W3)
+END_TIME = "end_time"  # interrupt cause of a session stopped at a strict end time (strict-end-time D2)
+STOP = "stop"  # `on_end_at` answer: stop the session at its end moment
 
 
 @dataclass
@@ -279,6 +281,7 @@ class Runner:
         self.job: ProcessJob | None = None
         self.kill_requested = False
         self.clock = clock.awake  # session limits count awake time only (sleep-aware D1)
+        self.wall = time.time  # wall clock of a run's end time (strict-end-time D2); replaced in tests
         (cfg.run_dir / "sessions").mkdir(parents=True, exist_ok=True)
         (cfg.run_dir / "markers").mkdir(parents=True, exist_ok=True)
         self.settings_path = write_session_settings(cfg)
@@ -323,14 +326,18 @@ class Runner:
             resume: str | None = None, tools: list[str] | None = None, json_schema: dict | None = None,
             timeout_s: float | None = None, idle_s: float | None = None,
             session_id: str | None = None, on_usage=None, on_start=None, sleep_check=None,
-            grace_s: float | None = None, on_deadline=None, on_deadline_abort=None) -> SessionResult:
+            grace_s: float | None = None, on_deadline=None, on_deadline_abort=None, end_at: float | None = None,
+            on_end_at=None) -> SessionResult:
         """`on_usage(window, utilization, resets_at)` is called from the stream thread for every usage reading;
         `on_start(session_id, run_id, pid)` right after the process starts; `sleep_check()` (a `Sleep` or None)
         every loop iteration: after a sleep a session silent for `grace_s` is ended as interrupted (design D3).
         `on_deadline(result, elapsed_s)` runs in a thread when the maximum duration is reached: seconds move the
         deadline, None ends the session by `max_time`, `WRAP_UP` ends it as interrupted with cause `wrap_up` so the
         dispatcher can resume it with a wrap-up prompt (wrap-up W3); while it runs, `max_time` waits.
-        `on_deadline_abort()` is called when the session ends while it runs (check-session-at-time-limit D1)."""
+        `on_deadline_abort()` is called when the session ends while it runs (check-session-at-time-limit D1).
+        `end_at`: a wall-clock moment (epoch seconds); once `wall()` reaches it, `on_end_at(result)` is called once in
+        this thread: `STOP` ends the session as interrupted with cause `end_time` and no limit check starts after
+        it, anything else lets it go on (strict-end-time D2)."""
         session_id = resume or session_id or str(uuid.uuid4())
         run_id = session_id if not resume else f"{session_id}-r{int(time.time())}"
         repo = self.cfg.team(team).repo
@@ -369,7 +376,18 @@ class Runner:
         grace_s = grace_s if grace_s is not None else self.cfg.wake_grace_minutes * 60
         woke = None  # awake time of a wake seen during this session, until the session shows a sign of life
         check, answer, expired = None, [], False  # thread of a pending deadline check and its answer
+        end_asked = end_at is None
         while self.proc.poll() is None:
+            if not end_asked and r.timeout_reason is None and r.interrupt_cause is None and self.wall() >= end_at:
+                end_asked = True
+                try:
+                    stop = on_end_at(r) == STOP if on_end_at is not None else False
+                except Exception:  # a failing callback leaves the session as without an end moment
+                    stop = False
+                if stop:
+                    r.interrupt_cause = END_TIME
+                    expired = True  # no limit check after the stop; a running one is aborted below
+                    self._end()
             if sleep_check is not None and sleep_check():
                 woke = now()
             t = now()

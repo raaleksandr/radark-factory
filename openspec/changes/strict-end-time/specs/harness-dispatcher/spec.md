@@ -32,7 +32,7 @@ At the start of a run with an end time the dispatcher SHALL print and log the en
 
 #### Scenario: Start line of a strict end time
 - **WHEN** at 10:02 a run starts with an end time of `12:00`, a strict end time and the default wrap-up grace period of 15 minutes
-- **THEN** the console shows `Run ends at 12:00 today, in 1 h 58 min (strict: running sessions wrap up at 12:00, stopped by 12:15)` and the run log records the end time with `strict` true
+- **THEN** the console shows `Run ends at 12:00 today, in 118 min (strict: running sessions wrap up at 12:00, stopped by 12:15)` and the run log records the end time with `strict` true
 
 #### Scenario: End line
 - **WHEN** the run ends because its end time of 07:00 is reached
@@ -44,7 +44,7 @@ At the start of a run with an end time the dispatcher SHALL print and log the en
 
 #### Scenario: Dry run with a strict end time
 - **WHEN** `dry-run` is given an end time of `12:00` and the strict option at 10:02
-- **THEN** it prints that the run would end at 12:00 today, in 1 h 58 min, and that running sessions wrap up at 12:00 and are stopped by 12:15
+- **THEN** it prints that the run would end at 12:00 today, in 118 min, and that running sessions wrap up at 12:00 and are stopped by 12:15
 
 ## ADDED Requirements
 

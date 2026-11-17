@@ -234,9 +234,9 @@ def test_start_line_and_log(env, monkeypatch):
     monkeypatch.setattr(hm.time, "time", lambda: NOW.timestamp())
     lines = []
     disp(env, lines, until=parse_until("07:00", NOW).timestamp()).start_until()
-    assert lines == ["Run ends at 07:00 tomorrow (2026-10-30), in 8 h 50 min"]
+    assert lines == ["Run ends at 07:00 tomorrow (2026-10-30), in 8 h 50 min (running sessions finish first)"]
     ev = log_events(env, "run_until")
-    assert len(ev) == 1 and ev[0]["until"] == "2026-10-30T07:00"
+    assert len(ev) == 1 and ev[0]["until"] == "2026-10-30T07:00" and ev[0]["strict"] is False
 
 
 def test_no_until_prints_nothing(env):

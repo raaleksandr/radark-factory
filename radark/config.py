@@ -68,6 +68,8 @@ class Config:
     limit_check_minutes: float = 60  # extension when the limit check finds the session progressing (D7)
     limit_checks: int = 3  # limit checks per session; 0 turns them off (D7)
     wrap_up_minutes: float = 15  # grace for a wrap-up at the last time limit; 0 turns it off (wrap-up W7)
+    until_strict: bool = False  # default of `--until-strict`: running sessions end by the end time + wrap-up grace
+    # (strict-end-time D1); no effect without `--until`
     wake_grace_minutes: float = 3  # after a wake, a silent session is ended as interrupted (sleep-aware D3)
     no_progress_limit: int = 2
     usage_backoff_minutes: int = 30
@@ -250,6 +252,7 @@ def load(path: str | Path, legacy_note: str | None = None) -> Config:
         limit_check_minutes=float(loop.get("limit_check_minutes", 60)),
         limit_checks=loop.get("limit_checks", 3),
         wrap_up_minutes=float(loop.get("wrap_up_minutes", 15)),
+        until_strict=loop.get("until_strict", False),
         wake_grace_minutes=float(loop.get("wake_grace_minutes", 3)),
         no_progress_limit=int(loop.get("no_progress_limit", 2)),
         usage_backoff_minutes=int(loop.get("usage_backoff_minutes", 30)),
@@ -277,6 +280,8 @@ def load(path: str | Path, legacy_note: str | None = None) -> Config:
         raise ConfigError(f"loop.limit_checks must be an integer of 0 or more, not {n!r}")
     if cfg.wrap_up_minutes < 0:
         raise ConfigError("loop.wrap_up_minutes must be 0 or more (0 turns the wrap-up off)")
+    if not isinstance(cfg.until_strict, bool):
+        raise ConfigError(f"loop.until_strict must be true or false, not {cfg.until_strict!r}")
     m = cfg.idle_reask_minutes
     if isinstance(m, bool) or not isinstance(m, int) or m < 0:
         raise ConfigError(f"loop.idle_reask_minutes must be an integer of 0 or more (0: only on hub activity), not {m!r}")

@@ -120,11 +120,11 @@ gets the date (`12:00 on 2026-11-18`) when the end time is not today, like `day_
 
 ### D7. Reporting the mode
 
-- Start line (`start_until`): `Run ends at 12:00 today, in 1 h 58 min (strict: running sessions wrap up at 12:00,
+- Start line (`start_until`): `Run ends at 12:00 today, in 118 min (strict: running sessions wrap up at 12:00,
   stopped by 12:15)`; strict with `G = 0`: `(strict: running sessions stop at 12:00)`; default: `(running sessions
   finish first)`.
 - `run_until` gets `strict: true|false`; `goal_start` gets `until_strict`.
-- `dry-run`: `Would end: 12:00 today, in 1 h 58 min (strict: …)` with the same suffix.
+- `dry-run`: `Would end: 12:00 today, in 118 min (strict: …)` with the same suffix.
 - The end line `End time 12:00 reached; ending the run.` stays.
 
 ### D8. Parallel sessions

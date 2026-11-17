@@ -35,7 +35,7 @@ which the end time holds: end time + wrap-up time at most. The default stays as 
   `Note: the end time 12:00 has passed; the running session finishes. To end on time, use --until-strict.`
   (logged as `end_time_passed`).
 - The start line, `run_until` in `runs.jsonl`, `goal_start` and `dry-run` show the mode, e.g.
-  `Run ends at 12:00 today, in 1 h 58 min (strict: running sessions wrap up at 12:00, stopped by 12:15)` or
+  `Run ends at 12:00 today, in 118 min (strict: running sessions wrap up at 12:00, stopped by 12:15)` or
   `(running sessions finish first)`.
 - `--until-strict` / `--no-until-strict` without `--until` is refused (exit 2, a message naming both options) before
   any session; the config key without `--until` has no effect and no message.

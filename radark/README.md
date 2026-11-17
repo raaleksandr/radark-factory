@@ -33,7 +33,7 @@ given, whatever its name. Configuration keys are the same for both names.
 | `[launch]` `permission_mode`, `extra_args` | default `auto`; `bypassPermissions` and `--bare` are refused |
 | `[answers]` `default`, `escalation_keywords` | the "choose the best variant" text; words that send a question to the owner (matched at a word start, case-insensitive, `ё` = `е`; the defaults include Russian stems such as `удал`, `пуш`, `депло`, `оплат`) |
 | `[triage]` `team`, `teams`, `max_per_handover` | product team that answers questions; `teams` limits whose questions are triaged (default: **every** team, the product team included); escalate after N triages per handover |
-| `[loop]` | `poll_seconds` 120, `session_idle_minutes` 20 (no stream event for that long ends the session), `session_max_minutes` 180 (maximum duration; the old `session_timeout_minutes` is accepted as this; both count awake time only; for a work session a checkpoint, see **Limit check**), `limit_check_minutes` 60 (positive: extension when the limit check finds the session progressing), `limit_checks` 3 (integer ≥ 0: limit checks per session, so a healthy work session runs up to 180 + 3 × 60 = 360 min; 0 turns them off), `wrap_up_minutes` 15 (≥ 0: grace period of the wrap-up at a work session's last time limit, see **Wrap-up**; 0 turns the wrap-up off and such a session is cut at its deadline), `wake_grace_minutes` 3 (positive: after the computer wakes, a session with no stream line for that long is ended as `interrupted` and resumed), `no_progress_limit` 2, `usage_pause_percent` 90 (integer 1–100: no new step while a usage window not yet reset is used at least this much; 100 turns the prediction off; `run --budget-5h` / `--budget-7d` replace it per window for one run), `usage_backoff_minutes` 30 (doubling up to `usage_backoff_max_minutes` 300; only when a usage-limit hit has no known reset time), `idle_ask` false, `idle_reask_minutes` 60 (integer ≥ 0: awake minutes since the last session after which an idle ask that returned `handed_over` or `none` is repeated without hub activity; sleeps do not count; 0 asks again only on hub activity; see **Idle ask**), `keep_awake` `"on"` (`"off"`, `"on"` or a daily range `"HH:MM-HH:MM"`: when a run keeps the computer from sleeping on its own; `"off"` lets the computer sleep; not a moment, which applies to one run only; `--keep-awake` replaces it for one run, see **Keep awake**), `parallel_sessions` 1 (integer ≥ 1: sessions at once, at most one per repository and handover; above 1 needs an `ho` with the hub lock; see **Parallel sessions**) |
+| `[loop]` | `poll_seconds` 120, `session_idle_minutes` 20 (no stream event for that long ends the session), `session_max_minutes` 180 (maximum duration; the old `session_timeout_minutes` is accepted as this; both count awake time only; for a work session a checkpoint, see **Limit check**), `limit_check_minutes` 60 (positive: extension when the limit check finds the session progressing), `limit_checks` 3 (integer ≥ 0: limit checks per session, so a healthy work session runs up to 180 + 3 × 60 = 360 min; 0 turns them off), `wrap_up_minutes` 15 (≥ 0: grace period of the wrap-up at a work session's last time limit, see **Wrap-up**; 0 turns the wrap-up off and such a session is cut at its deadline), `until_strict` false (a boolean: the default of `--until-strict`, so a run given `--until` ends on time; no effect without `--until`; `--no-until-strict` turns it off for one run; see **Pause / stop**), `wake_grace_minutes` 3 (positive: after the computer wakes, a session with no stream line for that long is ended as `interrupted` and resumed), `no_progress_limit` 2, `usage_pause_percent` 90 (integer 1–100: no new step while a usage window not yet reset is used at least this much; 100 turns the prediction off; `run --budget-5h` / `--budget-7d` replace it per window for one run), `usage_backoff_minutes` 30 (doubling up to `usage_backoff_max_minutes` 300; only when a usage-limit hit has no known reset time), `idle_ask` false, `idle_reask_minutes` 60 (integer ≥ 0: awake minutes since the last session after which an idle ask that returned `handed_over` or `none` is repeated without hub activity; sleeps do not count; 0 asks again only on hub activity; see **Idle ask**), `keep_awake` `"on"` (`"off"`, `"on"` or a daily range `"HH:MM-HH:MM"`: when a run keeps the computer from sleeping on its own; `"off"` lets the computer sleep; not a moment, which applies to one run only; `--keep-awake` replaces it for one run, see **Keep awake**), `parallel_sessions` 1 (integer ≥ 1: sessions at once, at most one per repository and handover; above 1 needs an `ho` with the hub lock; see **Parallel sessions**) |
 | `[goal]` `max_sessions`, `max_hours` | limits of a goal run: 40 sessions (every session counts: work, triage consultation, goal check), 12 hours (usage-limit waits count, sleeps of the computer do not); both positive; `--max-sessions` / `--max-hours` override them |
 
 A broken config (missing value, missing repository path, `ho` / `claude` not found) exits with code 2 and names the problem.
@@ -293,6 +293,7 @@ python -m radark note "<text>"                          # append a timestamped n
 python -m radark run --once   |  once                   # one work item (session + any triage), then exit
 python -m radark run [--budget-5h PCT] [--budget-7d PCT] # this run only: end once a window is used PCT % (see Usage guard)
 python -m radark run --until 07:00                      # this run only: start no new step from 07:00 on (see Pause / stop)
+python -m radark run --until 07:00 --until-strict       # ... and stop running sessions too: wrap up at 07:00, stopped by 07:15
 python -m radark run --keep-awake [WHEN]               # this run only: keep the computer from sleeping on its own (see Keep awake)
 python -m radark run --dry-run | dry-run                # read the hub, print the plan and owner answers; no session, no writes
 python -m radark plan [--steps N] [--goal FILE] [--max-sessions N]   # the next N steps (default 5) if every step succeeds
@@ -356,12 +357,24 @@ removed) or `<run_dir>/STOP` (exit cleanly between sessions). To stop at a time 
 if it has passed or is the current minute), `YYYY-MM-DD HH:MM` (or `YYYY-MM-DDTHH:MM`) a full date and time; local
 wall-clock time, so time the computer sleeps counts (unlike `--max-hours`, which counts awake time). From that moment
 no new step starts and the run ends (exit 0; a goal run ends with `limit`); a session running at that moment finishes
-first, which can be up to `session_max_minutes` later (a work session extended by its limit checks: longer). By
-default the run keeps the computer awake until it really ends, including that session (see **Keep awake**). Waits without a session (idle poll, `PAUSE`, usage wait,
-back-off) end at the moment. The start line says `Run ends at 07:00 tomorrow (2026-10-30), in 8 h 50 min`
-(`run_until` in `runs.jsonl`; the end logs `run_until_reached`). The end time applies to that one run and is not
+first, which can be up to `session_max_minutes` later (a work session extended by its limit checks: longer). The
+first time the end time passes while a session runs, the console (and `console.log`) says so once per run: `Note: the
+end time 12:00 has passed; the running session finishes. To end on time, use --until-strict.` (`end_time_passed` in
+`runs.jsonl`). With `--until-strict` (or `[loop] until_strict = true`; `--no-until-strict` turns that off for one
+run) the end time holds: at the end time every running work session is stopped and at once resumed with an end-time
+wrap-up prompt, limited to `wrap_up_minutes` (see **Wrap-up**); no limit check runs and no extension is given after
+the end time; every other session (wrap-up, triage consultation, limit check, goal check, idle ask) is stopped at the
+end time plus `wrap_up_minutes`. So the run ends by the end time plus `wrap_up_minutes` at the latest (with
+`wrap_up_minutes = 0`: work sessions are stopped at the end time, without a wrap-up). A stopped session is
+`interrupted` with the cause `end_time` (not an error, not "no progress") and the item's next session, in a later
+run, resumes it in its own context. `--until-strict` / `--no-until-strict` without `--until` is refused (exit 2).
+By default the run keeps the computer awake until it really ends, including that session (see **Keep awake**). Waits without a session (idle poll, `PAUSE`, usage wait,
+back-off) end at the moment. The start line says `Run ends at 07:00 tomorrow (2026-10-30), in 8 h 50 min (running
+sessions finish first)`, or with a strict end time `Run ends at 12:00 today, in 118 min (strict: running sessions
+wrap up at 12:00, stopped by 12:15)` (`(strict: running sessions stop at 12:00)` with `wrap_up_minutes = 0`)
+(`run_until` in `runs.jsonl` with `strict`; the end logs `run_until_reached`). The end time applies to that one run and is not
 stored. An unreadable value or a full date and time in the past is refused (exit 2) before any session. To check:
-`python -m radark run --until 07:00 --dry-run` prints `Would end: ...`. Ctrl+C during a session: first press finishes
+`python -m radark run --until 07:00 --dry-run` prints `Would end: ...` with the same mode. Ctrl+C during a session: first press finishes
 the session and exits, second press ends the session (process tree, outcome `interrupted`, cause owner) and
 exits; the next start resumes that session in its own context. A second dispatcher on the same
 run directory is refused by `<run_dir>/lock` (a stale lock from a dead PID is replaced with a warning).
@@ -507,7 +520,7 @@ any session.
   `usage budget reached: seven_day 81% (budget 80%)`; `goal_start` records the budget. An end time (`--until 07:00`,
   see Pause / stop under [Commands](#commands)) ends the run with `limit` (6) and the reason
   `end time 2026-10-30 07:00 reached`; with `--max-hours` as well, whichever comes first ends the run (`--until` counts
-  sleep of the computer, `--max-hours` does not); `goal_start` records `until`. In a console the dispatcher then waits with
+  sleep of the computer, `--max-hours` does not); `goal_start` records `until` and `until_strict`. In a console the dispatcher then waits with
   "Press any key to exit" (also for a `.cmd` started by double-click); `--no-wait` or a non-console stdin exits at once.
 - `run --dry-run --goal <file>` prints the goal-check prompt when no candidate is left. A goal run is not resumed
   after a restart: a new `run --goal` with the same file continues over the same hub state.
@@ -754,6 +767,16 @@ escalation.
   21:45  app · apply · wrap-up → finished (8 min)
   ```
 
+  At a strict end time (`--until-strict`, see **Pause / stop**) the same mechanism wraps a work session up with its
+  own prompt: it names the end time and the grace period, asks to check `git status`, start no new work, commit what
+  works, for apply check off finished tasks and write the open ones under a `Left for a later run` note in
+  `tasks.md`, and not to report the handover done unless the phase is complete. The wrap-up is stopped at the end
+  time plus `wrap_up_minutes`; unless it ended with its phase complete (then its outcome stays, e.g. `finished`), the
+  step is `interrupted` with the cause `end_time` and the next run resumes the session. Console:
+  `! app HO-…: end time 12:00 reached; asking the session to wrap up within 15 min`, then `app · apply ·
+  end-time wrap-up · HO-…`; log `end_time_stop` and `end_time_wrap_up`; no `time_limits` entry (an end time says
+  nothing about the task's size).
+
   The run log has `wrap_up_start` and `wrap_up`; the item's state keeps `time_limits`, one entry per wrap-up and per
   work session cut by `max_time` or `idle_timeout`. When the product team reviews that handover, its review prompt
   gets a paragraph that lists them (e.g. `wrapped up after 6 h with 3 extensions (finished)`), says the task may be
@@ -895,6 +918,9 @@ max_sessions, max_hours), `goal_guidance_carried` (path, recovered `stored | has
 `goal_check` (team, guidance_changed), `goal_verdict` (status, reason, done, left),
 `goal_verdict_invalid`, `goal_updated` (path, hash, diff_chars), `goal_unreadable` (path), `goal_result` (status
 `complete | blocked | stalled | stopped | limit`, reason, done, left, escalated, unescalated_denials, handovers, sessions, duration_s in awake time, slept_s),
+`run_until` (until, strict), `run_until_reached` (until), `end_time_passed` (until, sessions_running),
+`end_time_stop` (team, handover, phase, session, elapsed_s, until, grace_min), `end_time_wrap_up` (team, handover,
+phase, session, elapsed_s, until, grace_min, wrap_up_session, outcome, interrupt_cause, duration_s),
 `pause`, `stop`, `clear`, `hooks_not_loaded`.
 
 ## Hub contract used (read from `ho.py`, task 1.1)
