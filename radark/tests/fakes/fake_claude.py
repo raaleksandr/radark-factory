@@ -16,7 +16,9 @@ Scenario: {"steps": [{"hook": "SessionStart"} | {"hook": "PreToolUse", "input": 
            "result": {...} | null, "exit": 0}
 FAKE_CLAUDE_SCENARIOS may also hold {team: [scenarios]}: each team (HARNESS_TEAM) plays its own list.
 A Stop hook that blocks is recorded in the stream as {"type": "fake_hook", ...}.
-Each call (argv, cwd, selected env) is appended to FAKE_CLAUDE_SCENARIOS + ".calls"."""
+Each call (argv, cwd, selected env) is appended to FAKE_CLAUDE_SCENARIOS + ".calls".
+`auth status --json` is answered first, from FAKE_CLAUDE_AUTH (claude-login-state D7): `in` (default), `out`,
+`missing`, `garbage`, `sleep`; each such probe appends a line to FAKE_CLAUDE_SCENARIOS + ".auth" (not to ".calls")."""
 import json
 import os
 import subprocess
@@ -24,6 +26,27 @@ import sys
 import time
 
 argv = sys.argv[1:]
+if argv[:2] == ["auth", "status"]:
+    if os.environ.get("FAKE_CLAUDE_SCENARIOS"):
+        with open(os.environ["FAKE_CLAUDE_SCENARIOS"] + ".auth", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"argv": argv, "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY"),
+                                 "ANTHROPIC_AUTH_TOKEN": os.environ.get("ANTHROPIC_AUTH_TOKEN")}) + "\n")
+    mode = os.environ.get("FAKE_CLAUDE_AUTH", "in")
+    if mode == "in":  # made-up account fields: they must never show up anywhere (design D6)
+        print(json.dumps({"loggedIn": True, "authMethod": "claude.ai", "apiProvider": "firstParty",
+                          "email": "someone@example.invalid", "orgName": "Example Org Zebra"}))
+        sys.exit(0)
+    if mode == "out":
+        print(json.dumps({"loggedIn": False}))
+        sys.exit(1)
+    if mode == "missing":
+        print("error: unknown command 'auth'", file=sys.stderr)
+        sys.exit(1)
+    if mode == "garbage":
+        print("Logged in as someone@example.invalid")
+        sys.exit(0)
+    time.sleep(30)  # "sleep": longer than any lowered limit
+    sys.exit(0)
 base = os.environ["FAKE_CLAUDE_SCENARIOS"]
 if argv == ["--version"]:
     print("9.9.9 (Fake Claude)")

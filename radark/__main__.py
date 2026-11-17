@@ -3217,7 +3217,8 @@ def main(argv=None) -> int:
         return 2
     record_pipeline(d, directory)
     print(banner.BANNER)  # start-banner D2: once per start, after every check that refuses a start
-    print(config_mod.summary(cfg, config_mod.claude_version(cfg), ho.line()))
+    # claude-login-state D4, D5: one login probe per start, a warning only (no exit code depends on it)
+    print(config_mod.summary(cfg, config_mod.claude_version(cfg), ho.line(), config_mod.claude_login(cfg)))
     try:
         config_mod.check_owner(cfg, d.hub.teams())
     except config_mod.ConfigError as exc:

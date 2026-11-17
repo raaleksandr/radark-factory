@@ -3,6 +3,8 @@ radark-config-names D1-D4)."""
 from __future__ import annotations
 
 import datetime as dt
+import json
+import os
 import shutil
 import subprocess
 import tomllib
@@ -360,8 +362,37 @@ def claude_version(cfg: Config) -> str:
         return f"unknown ({exc})"
 
 
-def summary(cfg: Config, version: str, ho: str | None = None) -> str:
-    """`ho`: the `ho` version line text, e.g. `0.2.0 (contract 1)` (ho-contract-check D4)."""
+CLAUDE_LOGIN_TIMEOUT = 10  # seconds (claude-login-state D1); tests lower it
+LOGGED_IN = "logged in"
+NOT_LOGGED_IN = "NOT logged in - run `claude` and log in (sessions would fail)"
+
+
+def claude_login(cfg: Config) -> str:
+    """The login state from one read-only `claude auth status --json` (claude-login-state D1, D2, D6): no session,
+    no tokens. Only the boolean `loggedIn` field is read; nothing else of the output is returned or kept."""
+    env = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
+    unknown = "login state unknown (`claude auth status` {})"
+    try:
+        out = subprocess.run(cfg.claude + ["auth", "status", "--json"], capture_output=True, text=True,
+                             encoding="utf-8", errors="replace", timeout=CLAUDE_LOGIN_TIMEOUT, env=env,
+                             stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return unknown.format("timed out")
+    except (OSError, subprocess.SubprocessError):
+        return unknown.format("not available")
+    try:
+        answer = json.loads(out.stdout or "")
+    except ValueError:
+        answer = None
+    state = answer.get("loggedIn") if isinstance(answer, dict) else None
+    if isinstance(state, bool):
+        return LOGGED_IN if state else NOT_LOGGED_IN
+    return unknown.format("gave no readable answer" if out.returncode == 0 else "not available")
+
+
+def summary(cfg: Config, version: str, ho: str | None = None, login: str | None = None) -> str:
+    """`ho`: the `ho` version line text, e.g. `0.2.0 (contract 1)` (ho-contract-check D4); `login`: the Claude Code
+    login state, appended to the Claude Code line after `; ` (claude-login-state D3)."""
     lines = [*cfg.notes, f"Hub: {cfg.hub}", "Teams (in priority order):"]
     for t in cfg.teams:
         lines.append(f"  {t.id:<22} {t.kind:<9} {t.profile:<9} {t.repo}")
@@ -374,7 +405,7 @@ def summary(cfg: Config, version: str, ho: str | None = None) -> str:
             [f"user-defined: {', '.join(custom)}"] if custom else [])
         lines.append(f"Workflow profiles: {cfg.workflow_dir} ({'; '.join(parts)})")
     lines.append(f"Owner (escalations): {cfg.owner_team}")
-    lines.append(f"Claude Code: {version}")
+    lines.append(f"Claude Code: {version}; {login}" if login else f"Claude Code: {version}")
     if ho:
         lines.append(f"ho: {ho}")
     if cfg.parallel_sessions > 1:

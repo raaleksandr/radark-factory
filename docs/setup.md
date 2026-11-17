@@ -252,7 +252,7 @@ Teams (in priority order):
   app                    technical openspec  /home/me/work/my-factory/repos/app
 Triage: questions of product, app -> product
 Owner (escalations): owner
-Claude Code: 2.1.302 (Claude Code)
+Claude Code: 2.1.302 (Claude Code); logged in
 ho: 0.2.0 (contract 1)
 Run directory: /home/me/work/my-factory/.radark
 Machine: /home/me/.local/state/radark/machine - limits 2 sessions, 1 test run
@@ -296,9 +296,12 @@ Common errors (`dry-run` stops with exit code 2 and one line; the start of the l
 | `Configuration error: 'ho' (ho) was not found on PATH ...` / `ho incompatible: ...` | install radark-factory again so that its `ho` is on `PATH`, or fix `ho` in `radark.toml`; see "Compatibility of `ho`" |
 | `Configuration error: 'claude' (claude) was not found on PATH` | install Claude Code, or give its full path as `claude` in `radark.toml` |
 | `Configuration error: triage: team 'product' ...` | `[triage] team` must be a product team listed in `[[teams]]` |
+| ``Claude Code: ...; NOT logged in - run `claude` and log in (sessions would fail)`` | the exception: a **warning** in the summary, not a stop (the exit code stays the same and `run` goes on). Run `claude` once interactively and log in, then start again |
 
-`dry-run` does **not** check the Claude Code login: a missing login shows only when the first real session starts.
-Check it beforehand with `claude auth status`, or run `claude` once interactively and log in.
+The Claude Code line of the summary shows the login state from one read-only `claude auth status --json` (no
+session, no tokens): `logged in`, `NOT logged in - ...`, or `login state unknown (...)` when that command is not
+available, does not answer within 10 s, or gives no readable answer (for example an older Claude Code); then check
+the login yourself with `claude auth status`.
 
 `radark plan` prints the next few steps the run would take, if every step succeeds.
 
