@@ -61,15 +61,31 @@ def stop(env):
     return {"touch": str(env.root / "run" / "STOP")}
 
 
+def ended(env, team, within=30):
+    """A fake `claude` step: wait until the run log records `team`'s `session_end` (no wall-clock timer)."""
+    return {"wait_for_event": str(env.root / "run" / "runs.jsonl"), "event": "session_end", "team": team,
+            "within": within}
+
+
 def ordered(env, first, second):
     """Scenarios in which `first` and `second` run at the same time and `first` ends first; the first one also
-    asks the loop to stop, so no item is started again."""
+    asks the loop to stop, so no item is started again. The second session ends only after the dispatcher has
+    recorded the first one's end, so the end order holds on a loaded machine too."""
     return {
-        first: [{"steps": [START, {"wait_for": f(env, f"{second}.started")}, stop(env), {"touch": f(env, f"{first}.done")}],
-                 "result": DONE}],
-        second: [{"steps": [START, {"touch": f(env, f"{second}.started")}, {"wait_for": f(env, f"{first}.done")}, {"sleep": 2}],
-                  "result": DONE}],
+        first: [{"steps": [START, {"wait_for": f(env, f"{second}.started")}, stop(env)], "result": DONE}],
+        second: [{"steps": [START, {"touch": f(env, f"{second}.started")}, ended(env, first)], "result": DONE}],
     }
+
+
+def when_file(path, action, within=30):
+    """Run `action` in a daemon thread once `path` exists (polled every 0.05 s), or after `within` seconds anyway,
+    so a test waits for an observable condition instead of a fixed timer and never hangs."""
+    def watch():
+        end = time.monotonic() + within
+        while not os.path.exists(path) and time.monotonic() < end:
+            time.sleep(0.05)
+        action()
+    threading.Thread(target=watch, daemon=True).start()
 
 
 def starts_and_ends(env):
@@ -205,14 +221,15 @@ def test_two_sessions_run_at_once_and_end_in_either_order(env, first):
     d = disp(env, lines)
     assert d.loop() == 0
     seq = starts_and_ends(env)
-    assert seq[:2] == [("session_start", "app"), ("session_start", "backend")]
+    # both start before either ends; which worker writes its start record first is thread scheduling (design D1)
+    assert sorted(seq[:2]) == [("session_start", "app"), ("session_start", "backend")]
     assert seq[2:] == [("session_end", first), ("session_end", second)]
     for hid, team in ((A, "app"), (B, "backend")):
         rec = d.state.get(hid)
         assert rec["team"] == team and [s["outcome"] for s in rec["sessions"]] == ["finished"]
     raw = (env.root / "run" / "runs.jsonl").read_text(encoding="utf-8").splitlines()
     assert all(json.loads(x) for x in raw)  # complete JSON lines
-    assert any("(2 running)" in x and "backend" in x for x in lines)
+    assert any("(2 running)" in x for x in lines)  # one of the two start lines counts both
     ends = [x for x in lines if "→ finished" in x or "-> finished" in x]
     assert any(f"app" in x and A in x for x in ends) and any("backend" in x and B in x for x in ends)
     assert "running" not in d.state.meta
@@ -269,6 +286,39 @@ def test_console_log_has_whole_lines(env):
     assert len(lines) == 2 and all(x[:5].replace(":", "").isdigit() for x in lines)
 
 
+# ---- the fake's wait_for_event step (change stable-parallel-tests)
+
+def play_fake(env, steps):
+    """Run the fake `claude` alone with one scenario; returns the seconds it took."""
+    env.set_claude([{"steps": steps, "result": DONE}])
+    settings = env.root / "settings.json"
+    settings.write_text(json.dumps({"hooks": {}}))
+    fake = os.path.join(os.path.dirname(runner_mod.__file__), "tests", "fakes", "fake_claude.py")
+    t0 = time.monotonic()
+    subprocess.run([sys.executable, fake, "--settings", str(settings), "--session-id", "s-1", "-p", "x"],
+                   capture_output=True, check=True, timeout=60)
+    return time.monotonic() - t0
+
+
+def test_wait_for_event_returns_once_the_record_is_written(env):
+    log = env.root / "run" / "runs.jsonl"
+    log.parent.mkdir(exist_ok=True)
+    log.write_text(json.dumps({"event": "session_end", "team": "backend"}) + "\n"
+                   + '{"event": "session_end", "team": "ap', encoding="utf-8")  # other team, then a partial line
+
+    def finish():
+        time.sleep(0.5)
+        log.write_text(log.read_text(encoding="utf-8") + 'p"}\n', encoding="utf-8")
+    threading.Thread(target=finish, daemon=True).start()
+    took = play_fake(env, [ended(env, "app"), {"touch": f(env, "after")}])
+    assert os.path.exists(f(env, "after")) and 0.4 < took < 20  # waited for the line, not for the 30 s bound
+
+
+def test_wait_for_event_gives_up_after_its_bound(env):
+    took = play_fake(env, [ended(env, "app", within=0.5), {"touch": f(env, "after")}])
+    assert os.path.exists(f(env, "after")) and took >= 0.5
+
+
 # ---- run control (task 3.4)
 
 def test_end_time_lets_both_sessions_finish(env):
@@ -279,7 +329,7 @@ def test_end_time_lets_both_sessions_finish(env):
                                  "result": DONE}]})
     lines = []
     d = disp(env, lines)
-    threading.Timer(1.0, lambda: setattr(d, "until", time.time())).start()  # passes while both run
+    when_file(f(env, "backend.started"), lambda: setattr(d, "until", time.time()))  # passes while both run
     assert d.loop() == 0
     assert [t for _, t in starts_and_ends(env)].count("app") == 2  # one start and one end each
     assert [t for _, t in starts_and_ends(env)].count("backend") == 2

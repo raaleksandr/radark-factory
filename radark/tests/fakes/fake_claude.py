@@ -10,6 +10,8 @@ Scenario: {"steps": [{"hook": "SessionStart"} | {"hook": "PreToolUse", "input": 
                      | {"cmd": [argv...]} (run in the repository) | {"write": [relative path, text]}
                      | {"ho": [args...]} (the fake `ho` as this session's team, e.g. a `new` handover)
                      | {"touch": path} | {"wait_for": path, "within": s} (order two parallel sessions)
+                     | {"wait_for_event": runs.jsonl path, "event": name, "team": team, "within": s}
+                       (until the run log has a complete record of that event and team, at most 30 s)
                      | {"detach": pid file} (start a background process whose parent exits at once)],
            "result": {...} | null, "exit": 0}
 FAKE_CLAUDE_SCENARIOS may also hold {team: [scenarios]}: each team (HARNESS_TEAM) plays its own list.
@@ -58,6 +60,22 @@ def rate_limit_event(windows, status="allowed"):
         "unifiedWindows": {w: {"utilization": u, "resetsAt": t} for w, (u, t) in windows.items()}}}
 
 
+def has_event(path, event, team):
+    """True when the run log has a complete JSON line with this event and team; partial lines are ignored."""
+    try:
+        text = open(path, encoding="utf-8").read()
+    except OSError:
+        return False
+    for line in text.split("\n")[:-1]:  # the last piece has no newline yet (or is empty)
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(record, dict) and record.get("event") == event and record.get("team") == team:
+            return True
+    return False
+
+
 def run_hook(name, payload):
     for group in settings["hooks"].get(name, []):
         for h in group["hooks"]:
@@ -85,6 +103,10 @@ for step in scenario.get("steps", []):
     elif "wait_for" in step:  # until the file exists (another session's `touch`), at most 30 s
         end = time.monotonic() + step.get("within", 30)
         while not os.path.exists(step["wait_for"]) and time.monotonic() < end:
+            time.sleep(0.05)
+    elif "wait_for_event" in step:  # until the run log records it (e.g. another session's end), at most 30 s
+        end = time.monotonic() + step.get("within", 30)
+        while not has_event(step["wait_for_event"], step["event"], step["team"]) and time.monotonic() < end:
             time.sleep(0.05)
     elif "detach" in step:  # a background process whose parent exits at once; its PID goes to the file
         code = (f"import subprocess, sys; p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], "
