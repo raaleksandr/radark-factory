@@ -28,7 +28,7 @@ moment is on another calendar day than the end time, in `day_clock` form relativ
   Failing or flaky tests follow hub `AGENTS.md` §10 (never hidden by retries or skips).
 - [x] 3.2 `openspec validate strict-suffix-day-across-midnight --strict` passes; commit locally (no push, tag,
   release or reinstall), citing HO-20261117-ln7w.
-- [ ] 3.3 `ho done HO-20261117-ln7w -m "<summary with the test count>"`, then `ho sync`.
+- [x] 3.3 `ho done HO-20261117-ln7w -m "<summary with the test count>"`, then `ho sync`.
 
 ## Workflow follow-up
 

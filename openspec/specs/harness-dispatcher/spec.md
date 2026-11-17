@@ -1195,7 +1195,7 @@ While a run with an end time waits without a session (polling an idle hub, a `PA
 - **THEN** the run ends at about 07:00 and starts no session
 
 ### Requirement: Reporting an end time
-At the start of a run with an end time the dispatcher SHALL print and log the end time as a local date and time with the time left, and whether it is strict: with a strict end time, when running sessions are asked to wrap up and by when they are stopped; without, that running sessions finish first. When the end time ends the run it SHALL print and log that the end time was reached. `dry-run` given an end time SHALL print when the run would end, with the same mode.
+At the start of a run with an end time the dispatcher SHALL print and log the end time as a local date and time with the time left, and whether it is strict: with a strict end time, when running sessions are asked to wrap up and by when they are stopped; without, that running sessions finish first. When the moment by which sessions are stopped falls on a different calendar day than the end time, it SHALL name its day (`tomorrow`, or the date when that day is not tomorrow); on the same day it SHALL be shown as a clock time only. When the end time ends the run it SHALL print and log that the end time was reached. `dry-run` given an end time SHALL print when the run would end, with the same mode.
 
 #### Scenario: Start line
 - **WHEN** at 22:10 a run starts with an end time of `07:00`
@@ -1216,6 +1216,14 @@ At the start of a run with an end time the dispatcher SHALL print and log the en
 #### Scenario: Dry run with a strict end time
 - **WHEN** `dry-run` is given an end time of `12:00` and the strict option at 10:02
 - **THEN** it prints that the run would end at 12:00 today, in 118 min, and that running sessions wrap up at 12:00 and are stopped by 12:15
+
+#### Scenario: Strict grace period passes midnight
+- **WHEN** at 22:10 a run starts with an end time of `23:59`, a strict end time and a wrap-up grace period of 15 minutes
+- **THEN** the console shows `Run ends at 23:59 today, in 109 min (strict: running sessions wrap up at 23:59, stopped by 00:14 tomorrow)`
+
+#### Scenario: Strict grace period passes midnight on a later date
+- **WHEN** on 2026-11-18 a run starts with an end time of 23:59 on 2026-11-19, a strict end time and a wrap-up grace period of 15 minutes
+- **THEN** the strict-mode text says that running sessions wrap up at 23:59 and are stopped by `00:14 on 2026-11-20`
 
 ### Requirement: Strict end time
 The owner SHALL be able to make a run's end time strict, for one run with a command-line option (and to turn a configured default off for one run), or as the default in the `[loop]` configuration. Without either the end time SHALL NOT be strict. The setting SHALL apply to that run only and MUST NOT be stored.
