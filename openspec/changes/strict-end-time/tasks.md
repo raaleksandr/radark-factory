@@ -67,11 +67,11 @@
 
 - [x] 6.1 `radark/README.md`: `[loop]` table (`until_strict`), **Pause / stop** (`--until`, `--until-strict`, the
   hint, the start line), **Time limits** / **Wrap-up** (stop at a strict end time, cause `end_time`)
-- [ ] 6.2 Full suite: `radark-test-slot python -m pytest radark/tests`; all must pass; record the number of tests;
+- [x] 6.2 Full suite: `radark-test-slot python -m pytest radark/tests`; all must pass; record the number of tests;
   failing or flaky tests are reported per hub `AGENTS.md` section 10, never retried or skipped
 - [x] 6.3 Manual check: `python radark/sandbox/make_sandbox.py <tmp>` then `dry-run --until HH:MM` with and without
   `--until-strict`; record the output in the notes (no private paths)
-- [ ] 6.4 Commit locally (no push, tag, release or reinstall); `ho done HO-20261117-aor7 -m "<summary with the
+- [x] 6.4 Commit locally (no push, tag, release or reinstall); `ho done HO-20261117-aor7 -m "<summary with the
   number of tests>"`
 
 ## Notes
@@ -98,3 +98,4 @@
     with `--until-strict`: `Would end: 23:59 today, in 15 h 08 min (strict: running sessions wrap up at 23:59,
     stopped by 00:14)`; `dry-run --until-strict` alone: `--until-strict needs --until (an end time); without --until
     the run has no end time.`, exit 2.
+  - Full suite (`radark-test-slot python -m pytest radark/tests`): 1064 passed in 549 s, no failure, no flake seen.
