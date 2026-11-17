@@ -90,8 +90,12 @@ decision record: [docs/decisions](docs/decisions), background research: [docs/re
 ## Cockpit
 
 One local page for the owner: everything addressed to the owner team (escalations the dispatcher created and direct
-requests from teams) in the hubs of all pipelines on this computer, split into **Pending** and **Done**, newest first,
-with the pipeline name(s), sender, times, title, tags (an `escalation` badge), `expects`, the text and its history.
+requests from teams) in the hubs of all pipelines on this computer, split into **Pending** and **Done**, newest first
+(by last activity). The **Owner** tab reads like an inbox: one compact line per item with its title, the time it
+arrived (created, in local time) and its pipeline name(s); an escalation's line carries the red mark and the
+`escalation` badge. A click on a line, or Enter / Space when it has the focus, opens the details below it — sender,
+times, tags, `expects`, the text, its history and the answer controls — and closes them again; one item is open at a
+time. The open item and an answer being typed survive the periodic refresh.
 A short answer is given right on the page: only the actions `ho show` allows for the owner (`respond`, `done` with an
 optional note, `ack`, `decline` with a reason), run through `ho` as the owner team, followed by `ho sync`. Files to
 place or code to change are handled outside the cockpit, as each item's note says. The page refreshes every 30 s and

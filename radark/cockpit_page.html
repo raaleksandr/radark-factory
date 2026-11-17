@@ -52,8 +52,17 @@ th { font-weight: 600; color: var(--muted); font-size: 13px; }
 h2 { font-size: 16px; margin: 22px 0 10px; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px;
   margin-bottom: 12px; }
-.card.escalation { border-left: 4px solid var(--esc); }
 .card h3 { margin: 0 0 4px; font-size: 15px; }
+.item { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 6px; }
+.item.escalation { border-left: 4px solid var(--esc); }
+.item .line { display: flex; align-items: center; gap: 10px; padding: 7px 14px; cursor: pointer; border-radius: 8px; }
+.item .line:hover { background: var(--chip); }
+.item .line:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.item .line .title { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.item .line .chip { margin-right: 0; }
+.item .line .arrived { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.item .details { border-top: 1px solid var(--line); padding: 8px 16px 12px; }
 .meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--muted); }
 .chip { display: inline-block; background: var(--chip); border-radius: 10px; padding: 0 8px; font-size: 12px;
   color: var(--text); margin-right: 4px; }
@@ -160,6 +169,7 @@ const NEEDS_TEXT = {respond: true, decline: true};
 let note = "";
 let showAllDone = false;
 let loading = false;
+let ownerOpen = null;  // cardKey of the one Owner item whose details are open, or null; kept across refreshes
 
 function esc(s) {
   return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -286,14 +296,36 @@ function renderBody(box, it) {
   }
 }
 
-function card(it) {
-  const c = el("div", {cls: "card" + (it.escalation ? " escalation" : ""), "data-key": cardKey(it)});
+function arrival(iso) {
+  // the arrival time on an inbox line: the handover's created time as local date and time
+  if (!iso) return el("span", {cls: "arrived", text: "-"});
+  const d = new Date(iso);
+  if (isNaN(d)) return el("span", {cls: "arrived", text: String(iso)});
+  return el("span", {cls: "arrived", title: d.toLocaleString(), text: d.toLocaleString([], {
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"})});
+}
+
+function itemLine(it) {
+  // level 1 of the Owner inbox: escalation mark, title, pipelines, arrival time
+  const line = el("div", {cls: "line", role: "button", tabindex: "0", "aria-expanded": "false"});
+  line.appendChild(el("span", {cls: "arrow", text: ARROW_SHUT}));
+  if (it.escalation) line.appendChild(el("span", {cls: "chip esc", text: "escalation"}));
+  line.appendChild(el("span", {cls: "title", text: it.title || it.id}));
+  const pipes = el("span", {cls: "pipes"});
+  for (const p of it.pipelines || []) pipes.appendChild(el("span", {cls: "chip", text: p}));
+  line.appendChild(pipes);
+  line.appendChild(arrival(it.created));
+  return line;
+}
+
+function itemDetails(it) {
+  // level 2 of the Owner inbox: what the card showed before, without the title
+  const c = el("div", {cls: "details"});
   const tags = el("span");
   if (it.escalation) tags.appendChild(el("span", {cls: "chip esc", text: "escalation"}));
   for (const t of it.tags || []) if (t !== "escalation") tags.appendChild(el("span", {cls: "chip", text: t}));
   const pipes = el("span");
   for (const p of it.pipelines || []) pipes.appendChild(el("span", {cls: "chip", text: p}));
-  c.appendChild(el("h3", {text: it.title || it.id}));
   c.appendChild(el("div", {cls: "meta"}, [
     pipes, tags,
     el("span", {}, ["from ", el("strong", {text: it.from || "?"})]),
@@ -308,6 +340,40 @@ function card(it) {
   c.appendChild(box);
   if (it.pending) c.appendChild(answerArea(it));
   return c;
+}
+
+function setOpen(node, open) {
+  // shows or hides an item's details in the DOM only: nothing is rebuilt, nothing typed is lost
+  const line = node.querySelector(".line");
+  node.querySelector(".details").hidden = !open;
+  line.setAttribute("aria-expanded", open ? "true" : "false");
+  line.querySelector(".arrow").textContent = open ? ARROW_OPEN : ARROW_SHUT;
+}
+
+function toggleItem(node) {
+  const key = node.getAttribute("data-key");
+  const opening = ownerOpen !== key;
+  if (ownerOpen !== null) {
+    for (const n of document.querySelectorAll("#tab-owner .item")) {
+      if (n.getAttribute("data-key") === ownerOpen) setOpen(n, false);  // one item open at a time
+    }
+  }
+  ownerOpen = opening ? key : null;
+  setOpen(node, opening);
+}
+
+function item(it) {
+  const key = cardKey(it);
+  const node = el("div", {cls: "item" + (it.escalation ? " escalation" : ""), "data-key": key});
+  const line = itemLine(it);
+  node.appendChild(line);
+  node.appendChild(itemDetails(it));
+  line.addEventListener("click", function () { toggleItem(node); });  // on the line only, not the details
+  line.addEventListener("keydown", function (ev) {
+    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggleItem(node); }
+  });
+  setOpen(node, key === ownerOpen);
+  return node;
 }
 
 function answerArea(it) {
@@ -360,12 +426,15 @@ function answerArea(it) {
 
 function renderList(container, items, limit) {
   const old = {};
-  for (const c of container.querySelectorAll(".card")) old[c.getAttribute("data-key")] = c;
+  for (const c of container.querySelectorAll(".item")) old[c.getAttribute("data-key")] = c;
   const frag = document.createDocumentFragment();
   const shown = limit ? items.slice(0, limit) : items;
   for (const it of shown) {
-    const prev = old[cardKey(it)];
-    frag.appendChild(busyCard(prev) ? prev : card(it));
+    const key = cardKey(it);
+    const prev = old[key];
+    const node = busyCard(prev) ? prev : item(it);  // a busy node is kept as is, with its typed text
+    setOpen(node, key === ownerOpen);
+    frag.appendChild(node);
   }
   container.textContent = "";
   if (!items.length) container.appendChild(el("div", {cls: "empty", text: "Nothing here."}));
@@ -415,6 +484,10 @@ function render(data) {
   renderPipelines(data.pipelines || []);
   document.getElementById("pending-title").textContent = "Pending (" + data.pending.length + ")";
   document.getElementById("done-title").textContent = "Done (" + data.done.length + ")";
+  const doneShown = showAllDone ? data.done : data.done.slice(0, DONE_FIRST);
+  if (ownerOpen !== null && !data.pending.concat(doneShown).some(function (it) { return cardKey(it) === ownerOpen; })) {
+    ownerOpen = null;  // the open item is no longer listed: every line is shown closed
+  }
   renderList(document.getElementById("pending"), data.pending, 0);
   renderList(document.getElementById("done"), data.done, showAllDone ? 0 : DONE_FIRST);
   const more = document.getElementById("done-more");

@@ -427,6 +427,71 @@ def test_page_escapes_before_markdown():
     assert "https?:\\/\\/" in src and 'rel="noopener noreferrer"' in src  # links to http(s) targets only
 
 
+# ---- the Owner tab as an inbox list (change cockpit-owner-inbox-list)
+
+def js_function(src: str, name: str) -> str:
+    start = src.index("function " + name + "(")
+    end = src.index("\n}\n", start)
+    return src[start:end + 2]
+
+
+def test_page_inbox_line_has_title_arrival_and_pipelines():
+    src = page_source()
+    line = js_function(src, "itemLine")
+    assert "it.title || it.id" in line and "it.pipelines" in line and "arrival(it.created)" in line
+    arrival = js_function(src, "arrival")
+    assert 'hour: "2-digit", minute: "2-digit"' in arrival and "toLocaleString([]" in arrival  # local date and time
+    assert 'text: "-"' in arrival  # no created time
+    assert "innerHTML" not in line and "innerHTML" not in arrival
+
+
+def test_page_escalation_marked_on_the_line_only_from_the_flag():
+    src = page_source()
+    line, node = js_function(src, "itemLine"), js_function(src, "item")
+    assert 'if (it.escalation) line.appendChild(el("span", {cls: "chip esc", text: "escalation"}))' in line
+    assert '"item" + (it.escalation ? " escalation" : "")' in node
+    assert re.search(r"\.item\.escalation\s*\{\s*border-left:\s*4px solid var\(--esc\)", src)
+    assert line.count("it.escalation") == 1 and line.count("chip esc") == 1  # no other source of the mark
+
+
+def test_page_details_hold_the_former_card_and_start_hidden():
+    src = page_source()
+    details = js_function(src, "itemDetails")
+    for part in ("renderBody(box, it)", "answerArea(it)", "it.pending", 'cls: "meta"', "expects ", "from ",
+                 "created ", "last activity ", "it.tags"):
+        assert part in details
+    assert "function card(" not in src  # the always-open card is gone
+    node = js_function(src, "item")
+    assert "setOpen(node, key === ownerOpen)" in node  # hidden unless it is the open item
+    set_open = js_function(src, "setOpen")
+    assert '.details").hidden = !open' in set_open and '"aria-expanded"' in set_open
+
+
+def test_page_line_opens_by_click_and_keyboard_one_at_a_time():
+    src = page_source()
+    line, node, toggle = js_function(src, "itemLine"), js_function(src, "item"), js_function(src, "toggleItem")
+    assert 'role: "button", tabindex: "0", "aria-expanded": "false"' in line
+    assert 'line.addEventListener("click"' in node and 'line.addEventListener("keydown"' in node
+    assert 'ev.key === "Enter" || ev.key === " "' in node and "ev.preventDefault()" in node
+    assert node.count("addEventListener") == 2  # both on the line: clicks inside the details never toggle
+    assert "let ownerOpen = null;" in src
+    assert "setOpen(n, false)" in toggle and "ownerOpen = opening ? key : null" in toggle  # the other one closes
+    assert "render(" not in toggle and "load(" not in toggle  # toggling never rebuilds the list
+
+
+def test_page_refresh_keeps_open_item_and_typed_answer():
+    src = page_source()
+    render_list = js_function(src, "renderList")
+    assert 'querySelectorAll(".item")' in render_list
+    assert "busyCard(prev) ? prev : item(it)" in render_list  # a node with typed text is kept as is
+    assert "setOpen(node, key === ownerOpen)" in render_list  # reused and new nodes get the open state
+    busy = js_function(src, "busyCard")
+    assert "ta.value.trim()" in busy and "document.activeElement === ta" in busy
+    render = js_function(src, "render")
+    assert "ownerOpen = null" in render and render.index("ownerOpen = null") < render.index("renderList(")
+    assert "data.pending.concat(doneShown)" in render  # the open key must still be listed (pending or shown done)
+
+
 # ---- the command (task 2.4)
 
 def free_port() -> int:
