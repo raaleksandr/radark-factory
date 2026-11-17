@@ -353,7 +353,7 @@ class Dispatcher:
         title = cand.title or rec.get("title")
         goal = self.goal_for(cand.team)
         if not cand.timeout_resume:
-            result = self.session(cand.team, self.work_prompt(cand, rec, goal) + self.parallel_note(), cand.phase,
+            result = self.session(cand.team, self.start_prompt(cand, rec, goal, lock=False), cand.phase,
                                   cand.handover, resume=cand.resume_session, title=title)
             return self.finish(cand, rec, result)
         rec.pop("resume_after_timeout", None)  # one resume per time-limited session (design T4)
@@ -364,10 +364,8 @@ class Dispatcher:
         self.log.write("resume_after_timeout", team=cand.team, handover=cand.handover, session=info["session"],
                        reason=info.get("reason"), duration_s=info.get("duration_s"), phase=cand.phase)
         step = "resume after time limit" if info.get("reason") in TIME_LIMIT else "resume after interruption"
-        result = self.session(cand.team, prompts.timeout_resume_message(cand, info, lock.is_file(), goal,
-                                                                        self.profile(cand.team))
-                              + self.parallel_note(), cand.phase, cand.handover, resume=info["session"], title=title,
-                              step=step)
+        result = self.session(cand.team, self.start_prompt(cand, rec, goal, lock=lock.is_file()), cand.phase,
+                              cand.handover, resume=info["session"], title=title, step=step)
         if resume_failed(result):
             self.out(f"    session {info['session']} could not be resumed; starting a fresh {cand.phase} session")
             result = self.session(cand.team, self.work_prompt(cand, rec, goal) + self.parallel_note(), cand.phase,
@@ -902,14 +900,26 @@ class Dispatcher:
             self.goal.unescalated_denials += [{"handover": cand.handover, "team": cand.team, **d} for d in denials]
             self.goal_save()
 
-    def work_prompt(self, cand: sel.Candidate, rec: dict, goal: str | None) -> str:
+    def start_prompt(self, cand: sel.Candidate, rec: dict, goal: str | None, *, lock: bool,
+                     dry: bool = False) -> str:
+        """The full prompt of the first session of a work item: the resume message after a time limit (``lock``:
+        a stale git index lock exists) or the phase prompt, followed by the parallel note. The real start and
+        dry-run both use it; ``dry`` leaves the record unchanged (dry-run-exact-prompt D1, D2)."""
+        if cand.timeout_resume:
+            prompt = prompts.timeout_resume_message(cand, cand.timeout_resume, lock, goal, self.profile(cand.team))
+        else:
+            prompt = self.work_prompt(cand, rec, goal, consume=not dry)
+        return prompt + self.parallel_note()
+
+    def work_prompt(self, cand: sel.Candidate, rec: dict, goal: str | None, *, consume: bool = True) -> str:
         """The phase prompt; a review prompt names the worker's denials that were not escalated, then drops them
-        (escalate-denial D3). A product-team prompt of a run without a goal carries the no-goal block
-        (goal-ends-with-run D1)."""
+        (escalate-denial D3) unless ``consume`` is false (dry-run). A product-team prompt of a run without a goal
+        carries the no-goal block (goal-ends-with-run D1)."""
         no_goal = None if goal else self.no_goal_for(cand.team)
         profile = self.profile(cand.team)
         if cand.phase == "review":
-            return prompts.phase_prompt(cand, goal, denials=rec.pop("unescalated_denials", None),
+            denials = rec.pop("unescalated_denials", None) if consume else rec.get("unescalated_denials")
+            return prompts.phase_prompt(cand, goal, denials=denials,
                                         time_limits=rec.get("time_limits"), no_goal=no_goal, profile=profile)
         return prompts.phase_prompt(cand, goal, no_goal=no_goal, profile=profile)
 
@@ -2776,10 +2786,8 @@ def dry_run(d: Dispatcher) -> int:
         print(parallel_line(d, cands))
     lock = (d.cfg.team(c.team).repo / ".git" / "index.lock").is_file()
     goal = d.goal_for(c.team)
-    no_goal = None if goal else d.no_goal_for(c.team)
-    profile = d.profile(c.team)
-    print("Prompt:\n" + (prompts.timeout_resume_message(c, c.timeout_resume, lock, goal, profile) if c.timeout_resume
-                         else prompts.phase_prompt(c, goal, no_goal=no_goal, profile=profile)))
+    # the exact prompt the session would get; read-only (dry-run-exact-prompt D1, D2)
+    print("Prompt:\n" + d.start_prompt(c, d.state.get(c.handover) or {}, goal, lock=lock, dry=True))
     return 0
 
 

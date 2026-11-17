@@ -504,6 +504,78 @@ def test_dry_run_nothing_else_can_start(env, capsys):
         capsys.readouterr().out
 
 
+# ---- dry-run prints the exact prompt (change dry-run-exact-prompt)
+
+def dry_prompt(env, capsys):
+    """The prompt `dry-run` prints (the text after `Prompt:`, without print's final newline)."""
+    capsys.readouterr()
+    assert main(["--config", str(env.config_path), "dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert out.endswith("\n")
+    return out.split("Prompt:\n", 1)[1][:-1]
+
+
+def one_item(env):
+    env.set_hub({"inbox:app": {"action_required": [item(A, last=NEW)]}, f"show:{A}": show(A)})
+
+
+@pytest.mark.parametrize("n", [1, 2])
+def test_dry_run_prints_the_parallel_note(env, capsys, n):
+    parallel(env, n)
+    one_item(env)
+    text = dry_prompt(env, capsys)
+    assert (prompts.PARALLEL_NOTE in text) == (n > 1)
+    assert (prompts.TEST_SLOT_NOTE in text) == (n > 1)
+    if n > 1:
+        assert text.endswith(prompts.PARALLEL_NOTE + "\n\n" + prompts.TEST_SLOT_NOTE)
+
+
+@pytest.mark.parametrize("n", [1, 2])
+def test_dry_run_prompt_equals_the_real_prompt(env, capsys, n):
+    parallel(env, n)
+    one_item(env)
+    env.set_claude([{"steps": [START], "result": DONE}])
+    printed = dry_prompt(env, capsys)
+    assert main(["--config", str(env.config_path), "once"]) == 0
+    (call,) = env.claude_calls()
+    assert prompt_of(call) == printed
+
+
+def test_dry_run_prompt_equals_the_real_resume_prompt(env, capsys):
+    parallel(env, 2)
+    one_item(env)
+    env.set_claude([{"steps": [START], "result": DONE}, {"steps": [START], "result": DONE}])
+    d = disp(env)
+    d.loop(once=True)
+    rec = d.state.get(A)
+    rec["resume_after_timeout"] = {"session": rec["sessions"][0]["id"], "team": "app", "phase": "propose",
+                                   "reason": "idle_timeout", "duration_s": 60}
+    d.state.save()
+    printed = dry_prompt(env, capsys)
+    assert main(["--config", str(env.config_path), "once"]) == 0
+    resume = env.claude_calls()[1]
+    assert "--resume" in resume["argv"] and prompt_of(resume) == printed
+    assert printed.endswith(prompts.PARALLEL_NOTE + "\n\n" + prompts.TEST_SLOT_NOTE)
+
+
+def test_dry_run_of_a_review_leaves_the_state_unchanged(env, capsys):
+    env.set_hub({"inbox:product": {"to_review": [item(A, sender="product", last=NEW)]}, f"show:{A}": show(A)})
+    env.set_claude([{"steps": [START], "result": DONE}])
+    d = disp(env)
+    d.state.ensure(A, "app").update(phase="done", change="add-x",
+                                    unescalated_denials=[{"tool": "WebFetch", "input": "https://example.org"}])
+    d.state.save()
+    state_file = d.state.path
+    before = state_file.read_bytes()
+    printed = dry_prompt(env, capsys)
+    assert state_file.read_bytes() == before
+    assert "Phase: review" in printed and "- WebFetch: `https://example.org`" in printed
+    assert main(["--config", str(env.config_path), "once"]) == 0
+    (call,) = env.claude_calls()
+    assert prompt_of(call) == printed
+    assert "unescalated_denials" not in disp(env).state.get(A)
+
+
 # ---- a session's processes end with it (task 1.1)
 
 def pid_alive(pid):

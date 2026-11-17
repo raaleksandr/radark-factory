@@ -103,7 +103,9 @@ A limit check and a triage consultation run next to the session they serve and d
 - **State and recovery:** `state.json` keeps one running record per session (`meta.running` keyed by session ID; a
   single record of an earlier version is read as one); a restart recovers each.
 - **dry-run** adds `In parallel (parallel_sessions = N): <team> <phase> <handover>; ...` or `In parallel: nothing
-  else can start (<why>)`; `plan` stays a sequential prediction.
+  else can start (<why>)`; `plan` stays a sequential prediction. The prompt `dry-run` prints is exactly the prompt
+  the session would get (the same helper builds both), so it ends with the parallel note (and the test-slot note);
+  printing it changes no state.
 - **Back to one session:** set `parallel_sessions = 1` (or remove it).
 
 ### Several pipelines on one computer
