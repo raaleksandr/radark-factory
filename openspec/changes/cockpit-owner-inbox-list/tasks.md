@@ -44,11 +44,11 @@ release or reinstall.
   open at a time, type part of an answer and wait for a refresh, answer one item); otherwise check `/api/items` and
   the served page and say in the `ho done` message that the in-browser walk-through is left to product. Nothing
   from the sandbox is committed.
-- [ ] 3.3 Full suite: `python -m pytest radark/tests` (through `radark-test-slot` when run by a pipeline); all
+- [x] 3.3 Full suite: `python -m pytest radark/tests` (through `radark-test-slot` when run by a pipeline); all
   pass. Failing or flaky tests follow hub `AGENTS.md` §10 and are reported in the result.
 - [x] 3.4 Public-repository check: `git diff` of the change contains no owner path, product or company name, hub or
   run excerpt; IDs are invented.
-- [ ] 3.5 Commit locally (no push, tag, release or reinstall), `ho sync`, then `ho done HO-20261117-t3ub -m
+- [x] 3.5 Commit locally (no push, tag, release or reinstall), `ho sync`, then `ho done HO-20261117-t3ub -m
   "<commits, test counts, how to see it (npm run cockpit / radark cockpit → Owner), result of the manual check
   3.2, decisions that differ from or add to the handover (design D2 arrival time = created; D6 static page tests,
   no JS engine)>"` and `ho sync`. This is the last step of apply.
@@ -75,3 +75,8 @@ release or reinstall.
     body, history, text field and Respond / Decline; after a refresh the open item stays open and typed text is
     kept in the open and in a collapsed item (same node); an open item that vanished leaves all lines closed, no
     error. A walk-through by a person in a real browser is left to product.
+  - 3.3 result: 1003 passed, 1 failed (19:44 under machine load). The failure,
+    `radark/tests/test_parallel.py::test_end_time_lets_both_sessions_finish` (backend session never started), is
+    flaky and unrelated to this page-only change: alone it failed, passed, failed in three reruns; the test sets
+    `until` after a fixed 1.0 s, before the second session can start on a loaded machine. Reported per hub
+    AGENTS.md section 10, not retried or skipped.
