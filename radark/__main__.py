@@ -1796,14 +1796,18 @@ class Dispatcher:
 
     def until_mode(self) -> str:
         """`(strict: running sessions wrap up at 12:00, stopped by 12:15)`, `(strict: running sessions stop at
-        12:00)` without a grace period, or `(running sessions finish first)` (strict-end-time D7)."""
+        12:00)` without a grace period, or `(running sessions finish first)` (strict-end-time D7). A "stopped by"
+        moment on another calendar day than the end time names its day relative to now, `00:14 tomorrow` or
+        `00:14 on 2026-11-20` (strict-suffix-day-across-midnight D1, D2)."""
         at = dt.datetime.fromtimestamp(self.until)
         if not self.until_strict:
             return "(running sessions finish first)"
         if self.end_grace_s() <= 0:
             return f"(strict: running sessions stop at {at:%H:%M})"
-        by = dt.datetime.fromtimestamp(self.until + self.end_grace_s())
-        return f"(strict: running sessions wrap up at {at:%H:%M}, stopped by {by:%H:%M})"
+        by_ts = self.until + self.end_grace_s()
+        by = dt.datetime.fromtimestamp(by_ts)
+        by_text = day_clock(by_ts, time.time()) if by.date() != at.date() else f"{by:%H:%M}"
+        return f"(strict: running sessions wrap up at {at:%H:%M}, stopped by {by_text})"
 
     def until_end(self) -> int | None:
         """End the run once its wall-clock end time is reached, sleep counted (design D2, D3); None to go on."""

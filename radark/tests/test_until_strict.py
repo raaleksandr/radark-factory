@@ -295,6 +295,57 @@ def test_dry_run_with_a_strict_end_time(env, capsys, monkeypatch):
             in capsys.readouterr().out)
 
 
+# ---- the "stopped by" moment across midnight (strict-suffix-day-across-midnight, tasks 2.1-2.3)
+
+def start_line_at(env, monkeypatch, now, until):
+    monkeypatch.setattr(hm.time, "time", lambda: now.timestamp())
+    loop_config(env, "wrap_up_minutes = 15")
+    lines = []
+    d = Dispatcher(env.cfg(), out=lines.append)
+    d.until, d.until_strict = until.timestamp(), True
+    d.start_until()
+    return lines
+
+
+def test_start_line_stopped_by_passes_midnight_to_tomorrow(env, monkeypatch):
+    now = dt.datetime(2026, 11, 17, 22, 10)
+    lines = start_line_at(env, monkeypatch, now, now.replace(hour=23, minute=59))
+    assert lines == ["Run ends at 23:59 today, in 109 min "
+                     "(strict: running sessions wrap up at 23:59, stopped by 00:14 tomorrow)"]
+
+
+def test_start_line_stopped_by_passes_midnight_on_a_later_date(env, monkeypatch):
+    now = dt.datetime(2026, 11, 18, 10, 2)
+    lines = start_line_at(env, monkeypatch, now, dt.datetime(2026, 11, 19, 23, 59))
+    (line,) = lines
+    assert line.startswith("Run ends at 23:59 tomorrow (2026-11-19), in ")
+    assert line.endswith("(strict: running sessions wrap up at 23:59, stopped by 00:14 on 2026-11-20)")
+
+
+def test_dry_run_stopped_by_passes_midnight_on_a_later_date(env, capsys, monkeypatch):
+    now = dt.datetime(2026, 11, 18, 10, 2)
+    real = dt.datetime
+
+    class Fixed(real):
+        @classmethod
+        def now(cls, tz=None):
+            return now
+
+    monkeypatch.setattr(hm.dt, "datetime", Fixed)
+    monkeypatch.setattr(hm.time, "time", lambda: now.timestamp())
+    assert run(env, "dry-run", "--until", "2026-11-19 23:59", "--until-strict") == 0
+    out = capsys.readouterr().out
+    assert "Would end: 23:59 tomorrow (2026-11-19), in " in out
+    assert "(strict: running sessions wrap up at 23:59, stopped by 00:14 on 2026-11-20)" in out
+
+
+def test_start_line_stopped_by_on_the_end_time_day_names_no_day(env, monkeypatch):
+    now = dt.datetime(2026, 11, 17, 22, 10)
+    lines = start_line_at(env, monkeypatch, now, dt.datetime(2026, 11, 18, 7, 0))
+    assert lines == ["Run ends at 07:00 tomorrow (2026-11-18), in 8 h 50 min "
+                     "(strict: running sessions wrap up at 07:00, stopped by 07:15)"]
+
+
 def test_goal_start_records_the_mode(env):
     from radark.state import GoalRun
     goal = env.root / "goal.md"
