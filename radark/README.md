@@ -12,7 +12,8 @@ A new user starts with [Setup from zero](../docs/setup.md) (hub, team repositori
 
 1. `ho` and `claude` on `PATH` (or give full commands in the config). The owner's own Claude Code login is used;
    the dispatcher removes `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` from the agents' environment and never uses `--bare`.
-2. `copy radark.toml.example radark.toml` (git-ignored) and adjust paths.
+2. `python -m radark example-config -o radark.toml` (git-ignored; it refuses to overwrite an existing file, `--force`
+   replaces it) and adjust paths; the example is [examples/radark.toml.example](examples/radark.toml.example).
 3. `python -m radark dry-run` — prints the hub, teams, Claude Code and `ho` versions, the candidates and the session it would start.
 
 ## Configuration (`radark.toml`)
@@ -128,7 +129,9 @@ so the dispatcher coordinates them through a **machine directory**: `RADARK_MACH
 on purpose (for example two Claude accounts: they then share nothing); keep it on a local disk (OS file locks on a
 network or synced folder may not work).
 
-- **Machine limits** (`machine.toml` in the machine directory; see `machine.toml.example`): `[machine] sessions`
+- **Machine limits** (`machine.toml` in the machine directory; write it with
+  `python -m radark example-config --machine -o <machine directory>/machine.toml`; the example is
+  [examples/machine.toml.example](examples/machine.toml.example)): `[machine] sessions`
   (default 2) caps the Claude Code sessions of all pipelines together, `test_runs` (default 1) the full test runs
   through `radark-test-slot`. A value that is not an integer of at least 1 is refused at start (exit 2, naming the file
   and key); a change applies at the next slot request (an invalid one read later keeps the last valid limits, with one
@@ -308,6 +311,7 @@ python -m radark escalations                            # escalated and stalled 
 python -m radark clear <ID>                             # make an item selectable again (after you answered it)
 python -m radark keep <ID> [--team <id>] [--off]        # next phases resume the previous session
 python -m radark cockpit [--port N] [--config FILE]... [--no-browser] [--forget FILE]   # the owner's local page (README "Cockpit")
+python -m radark example-config [--machine] [-o FILE [--force]] [--path]   # print / write the example radark.toml (machine.toml)
 ```
 
 **Cockpit server** (`radark/cockpit.py`, page `radark/cockpit_page.html`, History in `radark/cockpit_history.py`,

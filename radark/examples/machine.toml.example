@@ -1,6 +1,7 @@
 # Machine limits shared by every radark pipeline of this OS user on this computer (change machine-wide-instances).
 #
-# Copy to machine.toml in the machine directory:
+# Write it to machine.toml in the machine directory with
+# `radark example-config --machine -o <machine directory>/machine.toml`; the directory is:
 #   Windows:    %LOCALAPPDATA%\radark\machine\machine.toml
 #   elsewhere:  ${XDG_STATE_HOME:-~/.local/state}/radark/machine/machine.toml
 #   or the directory named by RADARK_MACHINE_DIR, when set.

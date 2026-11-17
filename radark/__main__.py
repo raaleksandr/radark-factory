@@ -1,5 +1,5 @@
 """CLI and loop: python -m radark [--config FILE]
-run|once|dry-run|plan|status|test-slot|escalations|clear|keep|note|cockpit.
+run|once|dry-run|plan|status|test-slot|escalations|clear|keep|note|cockpit|example-config.
 
 Without --config the configuration file is radark.toml in the current directory, or the legacy harness.toml
 (radark-config-names D1)."""
@@ -3082,12 +3082,22 @@ def main(argv=None) -> int:
                     help="also show this pipeline (repeatable); it is recorded in the pipeline registry")
     ck.add_argument("--no-browser", action="store_true", help="do not open the browser")
     ck.add_argument("--forget", metavar="FILE", help="remove a configuration from the pipeline registry and exit")
+    ex = sub.add_parser("example-config", help="print the example radark.toml (--machine: machine.toml); -o FILE "
+                                               "writes it")
+    ex.add_argument("--machine", action="store_true", help="the example machine.toml instead of radark.toml")
+    ex.add_argument("-o", dest="output", metavar="FILE", help="write the example to FILE; refuses an existing file")
+    ex.add_argument("--force", action="store_true", help="with -o: replace an existing FILE")
+    ex.add_argument("--path", dest="show_path", action="store_true",
+                    help="print the path of the installed example file instead of its content")
     args = p.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):  # titles and agent text may not fit the console code page
         try:
             stream.reconfigure(errors="replace")
         except (AttributeError, ValueError):
             pass
+    if args.command == "example-config":  # no configuration, lock or `ho` (ship-example-configs D3)
+        from . import examples
+        return examples.command(args.machine, args.output, args.force, args.show_path)
 
     budget = {}
     for window, flag in BUDGET_OPTIONS.items():

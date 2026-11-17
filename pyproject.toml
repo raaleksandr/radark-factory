@@ -27,4 +27,5 @@ include = ["radark", "radark.*", "harness"]   # harness: deprecated alias of rad
 exclude = ["radark.tests", "radark.tests.*"]
 
 [tool.setuptools.package-data]
-radark = ["hooks/*.py", "sandbox/*.py", "README.md", "workflows/*/*", "cockpit_page.html"]   # workflows: built-in profiles; the cockpit page
+radark = ["hooks/*.py", "sandbox/*.py", "README.md", "workflows/*/*", "cockpit_page.html",
+          "examples/*.toml.example"]   # workflows: built-in profiles; the cockpit page

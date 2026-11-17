@@ -190,9 +190,11 @@ committed history.
 
 ## 5. Configuration
 
-Start from [radark.toml.example](../radark.toml.example) (in the repository; it is not installed with the package):
-copy it into the pipeline folder as `radark.toml` and edit it. Keep the configuration and the run directory in their
-own folder, outside the team repositories. The minimum to edit:
+Start from the example configuration, which is installed with the package: in the pipeline folder run
+`radark example-config -o radark.toml` and edit the new file. It does not overwrite an existing file (`--force`
+replaces it); without `-o` it prints the example. In the repository the example is
+[radark/examples/radark.toml.example](../radark/examples/radark.toml.example). Keep the configuration and the run
+directory in their own folder, outside the team repositories. The minimum to edit:
 
 - `hub` — the hub directory (it must contain `hub.json`);
 - `owner_team` — your hub team, default `owner`; it must be a hub team and not in `[[teams]]`;
@@ -228,8 +230,10 @@ Every other key has a default; their meanings are in "Configuration (`radark.tom
 (`state.json`, `runs.jsonl`, `console.log`, `PAUSE`, `STOP`, ...) is `.radark` next to `radark.toml` unless you set
 `run_dir`; see "Run-time files (`run_dir`)".
 
-`machine.toml` is needed only when several pipelines run on one computer; see
-[machine.toml.example](../machine.toml.example) and "Several pipelines on one computer".
+`machine.toml` is needed only when several pipelines run on one computer: write it with
+`radark example-config --machine -o <machine directory>/machine.toml` (`radark status` prints the machine directory;
+the example is [radark/examples/machine.toml.example](../radark/examples/machine.toml.example)) and see "Several
+pipelines on one computer".
 
 ## 6. First dry run
 

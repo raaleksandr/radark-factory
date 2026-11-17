@@ -72,7 +72,7 @@ These lines assume a hub, team repositories and a Claude Code login already exis
 ```
 uv tool install git+https://github.com/<owner>/radark-factory     # or: pip install .
 radark --version                                                     # the installed version and the ho it needs
-copy radark.toml.example D:\work\my-factory\radark.toml             # edit hub, teams, paths
+radark example-config -o D:\work\my-factory\radark.toml          # the example; edit hub, teams, paths
 cd D:\work\my-factory
 radark dry-run                                                       # reads radark.toml here; run files in .radark\
 radark run
@@ -87,7 +87,7 @@ legacy `harness.toml` and, without `run_dir`, uses an existing `.harness\` (see 
 
 Keep the configuration and run directory of each pipeline in its own folder, outside this repository.
 Several pipelines may run on one computer at once: they share one machine-wide usage record, a cap on concurrent
-sessions and full test runs (`machine.toml`, see [machine.toml.example](machine.toml.example)), and each team
+sessions and full test runs (`machine.toml`, see [machine.toml.example](radark/examples/machine.toml.example)), and each team
 repository belongs to one running pipeline; `radark status` shows them (see "Several pipelines on one computer" in
 [radark/README.md](radark/README.md)).
 Full documentation: [radark/README.md](radark/README.md). Design: [openspec/specs](openspec/specs),

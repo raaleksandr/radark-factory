@@ -1,4 +1,4 @@
-# Copy to radark.toml and adjust. Relative paths are resolved from this file's directory.
+# Get it with `radark example-config -o radark.toml` and adjust. Relative paths are resolved from this file's directory.
 
 # name = "app-pipeline"        # the pipeline's name in the cockpit (default: the run directory's parent folder)
 hub = 'D:\work\hub'
