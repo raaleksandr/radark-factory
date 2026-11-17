@@ -8,6 +8,8 @@ answers agreed stops, escalates what only a human may decide, and archives only 
 It is a "light" factory rather than a fully dark one: the owner stays in the loop for pushes, deploys, payments and
 anything else on the escalation list, and decides through the same hub the agents use.
 
+New here? Start with [Setup from zero](docs/setup.md): from nothing to a first `radark dry-run` and a first run.
+
 ## Status
 
 Early and opinionated. Used daily on one Windows 11 PC with four teams. Python 3.11+, standard library only (plus `ho` from radark-handover).
@@ -63,6 +65,9 @@ profile in the team's `CLAUDE.md`, so a session started by hand works the same w
 ```
 
 ## Quick start
+
+These lines assume a hub, team repositories and a Claude Code login already exist; to set them up, follow
+[Setup from zero](docs/setup.md).
 
 ```
 uv tool install git+https://github.com/<owner>/radark-factory     # or: pip install .

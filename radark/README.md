@@ -8,6 +8,8 @@ Runtime: Python 3.12, standard library only. Tests: `pytest`. Tested with Claude
 
 ## Setup
 
+A new user starts with [Setup from zero](../docs/setup.md) (hub, team repositories, configuration, first run).
+
 1. `ho` and `claude` on `PATH` (or give full commands in the config). The owner's own Claude Code login is used;
    the dispatcher removes `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` from the agents' environment and never uses `--bare`.
 2. `copy radark.toml.example radark.toml` (git-ignored) and adjust paths.
