@@ -38,11 +38,15 @@ The Hub section SHALL link to the radark-handover README for a hub shared throug
 - **THEN** it states the team's role, hub and team, `ho sync` first and last, the owner-only actions and the decisions the team takes, and the workflow profile
 
 ### Requirement: Configuration and first dry run in the guide
-The Configuration section SHALL start from `radark.toml.example`, name the minimum keys to edit and where the run directory goes, and mention `machine.toml` only for several pipelines on one computer. The First dry run section SHALL show a short neutral example of a healthy `radark dry-run` output and the common errors with their fix: hub not found, team path wrong, `ho` incompatible, Claude Code not found or not logged in.
+The Configuration section SHALL start from `radark.toml.example`, name the minimum keys to edit and where the run directory goes, and mention `machine.toml` only for several pipelines on one computer. The First dry run section SHALL show a short neutral example of a healthy `radark dry-run` output, whose Claude Code line shows the login state, and the common errors with their fix: hub not found, team path wrong, `ho` incompatible, Claude Code not found or not logged in. The "NOT logged in" line SHALL be listed with its fix (run `claude` and log in) and marked as a warning that does not stop the start. The guide SHALL NOT say that `dry-run` does not check the Claude Code login.
 
 #### Scenario: A common error
 - **WHEN** `radark dry-run` stops because a team `repo` path does not exist
 - **THEN** the guide shows the start of that message and how to fix it
+
+#### Scenario: Not logged in
+- **WHEN** a user's `radark dry-run` summary says `NOT logged in`
+- **THEN** the guide's common errors show that line, say it is a warning that does not stop the start, and tell them to run `claude` and log in
 
 ### Requirement: Sandbox and first real run in the guide
 The sandbox section SHALL show how to try the whole loop on a throw-away hub and throw-away repositories first, using what the engine has today without a new command. The First real run section SHALL cover `radark run` and `--until`, where to watch (the console, `console.log`, the cockpit), how to answer an escalation, and what the engine never does on its own (push, publish, pay).
