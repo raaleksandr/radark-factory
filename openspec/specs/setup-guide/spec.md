@@ -20,11 +20,15 @@ The guide SHALL have these sections in this order: Prerequisites, Install, Hub, 
 - **THEN** the sections appear in this order, and the First dry run section comes after Hub, Team repositories and Configuration
 
 ### Requirement: Prerequisites and install in the guide
-The Prerequisites section SHALL name the Python version, Claude Code with its tested version and a login, Git, Node and the OpenSpec CLI (only for the `openspec` profile), and the Windows vs POSIX differences that matter. The Install section SHALL install radark-factory (which brings `ho`), show how to check both, including the `ho` JSON contract number, and say what the start check prints when `ho` is incompatible.
+The Prerequisites section SHALL name the Python version, Claude Code with its tested version and a login, Git, Node and the OpenSpec CLI (only for the `openspec` profile), and the Windows vs POSIX differences that matter. The Install section SHALL install radark-factory (which brings `ho`), show how to check both, including the `ho` JSON contract number, and say what the start check prints when `ho` is incompatible. The installed radark-factory SHALL be checked with `radark --version`, not with `pip show` or `uv tool list`.
 
 #### Scenario: Checking the install
 - **WHEN** a user follows the Install section
 - **THEN** they can see the installed radark-factory, the `ho` version with its contract number, and the Claude Code version
+
+#### Scenario: Engine version by its own flag
+- **WHEN** a user reads the Install section's check commands
+- **THEN** the engine version is checked with `radark --version`, and neither `pip show radark-factory` nor `uv tool list` is given as the way to check it
 
 ### Requirement: Hub and team repositories in the guide
 The Hub section SHALL link to the radark-handover README for a hub shared through git and give the minimal commands for a local hub (a plain folder or a local git repository without a remote) and the meaning of `HO_HUB` / `HO_TEAM`. The Team repositories section SHALL give a copy-paste `CLAUDE.md` template, a `.claude/settings.json` example with `HO_HUB` / `HO_TEAM` in `env`, `openspec init` for the `openspec` profile, and what the product team that sends tasks needs.
