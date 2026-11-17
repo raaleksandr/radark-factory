@@ -164,6 +164,16 @@ python -m pytest radark/tests
 Changes go through OpenSpec (`openspec/changes/`). A sandbox with a fake hub and two tiny team repositories:
 `python radark/sandbox/make_sandbox.py <dir>`.
 
+### Releasing (owner's steps)
+
+1. When the required `ho` JSON contract changes, update three things together: the `radark-handover` pin in
+   `pyproject.toml`, the tag table `HO_RELEASE_CONTRACTS` in `radark/hub.py` (add the new tag with the contract that
+   tag's `ho --version --json` reports) and `SUPPORTED_HO_CONTRACTS` next to it. A new pin with the same contract
+   is added to the table too.
+2. Run the full test suite; all must pass. `radark/tests/test_ho_pin.py` fails when the pinned tag is not in the
+   table or its contract is not supported.
+3. Then tag and release.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

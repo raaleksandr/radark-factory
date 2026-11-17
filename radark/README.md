@@ -49,6 +49,11 @@ one engine release can accept two contracts during a migration). A compatible `h
 `ho: 0.2.0 (contract 1)` right after `Claude Code: ...` (`plan` prints no summary). `escalations`, `clear`, `keep`
 and `note` do not use the hub and skip the check.
 
+The `ho` a release installs is the `radark-handover` tag pinned in `pyproject.toml`. The table
+`HO_RELEASE_CONTRACTS` in `radark/hub.py` maps each known tag to its contract, and the offline test
+`radark/tests/test_ho_pin.py` fails when the pinned tag is not in the table or its contract is not in
+`SUPPORTED_HO_CONTRACTS`, so a release cannot pin an incompatible `ho` (release steps: README "Development").
+
 Otherwise the dispatcher prints one line on stderr and exits with code **2**:
 
 | Case | Message (abridged) | What to do |

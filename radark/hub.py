@@ -48,6 +48,10 @@ class HoTimeout(HoError):
 
 
 SUPPORTED_HO_CONTRACTS = (1,)  # JSON contract versions of `ho` this engine reads (ho-contract-check D2)
+# radark-handover release tags this engine knows -> the JSON contract of their `ho` (pin-ho-contract-check D1).
+# Update together with the `radark-handover` pin in pyproject.toml; radark/tests/test_ho_pin.py checks that the
+# pinned tag is listed here with a contract in SUPPORTED_HO_CONTRACTS. The start check does not read it.
+HO_RELEASE_CONTRACTS = {"v0.2.0": 1}
 VERSION_TIMEOUT_S = 60  # time limit of the start probe `ho --version --json`
 
 
