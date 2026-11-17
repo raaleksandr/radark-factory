@@ -180,7 +180,68 @@ def test_console_and_run_log(env, monkeypatch):
     [x] = event["denials"]
     assert (x["tool"], x["input"], x["phase"], x["session"]) == (
         "PowerShell", STOP["tool_input"]["command"], "apply", session)
-    assert log_events(env, "session_end")[0]["outcome"] == "waiting_for_owner"  # the raw outcome (design D1)
+    [end] = log_events(env, "session_end")  # decided before it is reported (finished-outcome-after-denial D1)
+    assert (end["outcome"], end["denials"], end["unescalated_denials"]) == ("finished", 1, 1)
+
+
+# ---- the reported outcome (change finished-outcome-after-denial)
+
+def end_lines(lines):
+    return [x for x in lines if f" {A} → " in x]
+
+
+def test_finished_end_line_with_one_denial(env, monkeypatch):
+    monkeypatch.setattr("radark.__main__.utf8_console", lambda: True)
+    lines = []
+    d = apply_item(env, DONE, lines)
+    env.set_claude([denied()])
+    d.loop(once=True)
+    [line] = end_lines(lines)
+    assert line[7:].startswith(f"app · apply · {A} → finished (")
+    assert line.endswith("; 1 permission denial, not escalated)")
+    [end] = log_events(env, "session_end")
+    assert (end["outcome"], end["denials"], end["unescalated_denials"]) == ("finished", 1, 1)
+    [entry] = d.state.get(A)["sessions"]
+    assert (entry["outcome"], entry["unescalated_denials"]) == ("finished", 1)
+    assert not [x for x in lines if "waiting_for_owner" in x]
+    assert "waiting_for_owner" not in json.dumps(d.state.get(A))
+    first = next(i for i, x in enumerate(lines) if "permission denied: PowerShell" in x)
+    last = next(i for i, x in enumerate(lines) if "phase completed despite" in x)
+    assert first < lines.index(line) < last  # the same order as before, with the right word (design D2)
+
+
+def test_finished_end_line_with_two_denials(env, monkeypatch):
+    monkeypatch.setattr("radark.__main__.utf8_console", lambda: True)
+    lines = []
+    d = apply_item(env, DONE, lines)
+    env.set_claude([denied(denials=[STOP, {"tool_name": "Bash", "tool_input": {"command": "kill 1"}}])])
+    d.loop(once=True)
+    [line] = end_lines(lines)
+    assert " → finished (" in line and line.endswith("; 2 permission denials, not escalated)")
+    [end] = log_events(env, "session_end")
+    assert (end["outcome"], end["denials"], end["unescalated_denials"]) == ("finished", 2, 2)
+
+
+@pytest.mark.parametrize("case", ["marker", "not_done"])
+def test_escalated_denial_still_waits_for_the_owner(env, monkeypatch, case):
+    monkeypatch.setattr("radark.__main__.utf8_console", lambda: True)
+    lines = []
+    if case == "marker":
+        d = apply_item(env, DONE, lines)
+        risky = {"hook": "PreToolUse", "input": {"tool_name": "AskUserQuestion",
+                                                 "tool_input": {"questions": [{"question": "Push to the remote?"}]}}}
+        env.set_claude([denied(risky)])
+    else:
+        d = apply_item(env, (), lines)
+        env.set_claude([denied(result="Could not stop the test run.")])
+    d.loop(once=True)
+    [line] = end_lines(lines)
+    assert " → waiting_for_owner (" in line and "not escalated" not in line
+    [end] = log_events(env, "session_end")
+    assert end["outcome"] == "waiting_for_owner" and "unescalated_denials" not in end
+    [entry] = d.state.get(A)["sessions"]
+    assert entry["outcome"] == "waiting_for_owner" and "unescalated_denials" not in entry
+    assert d.state.blocked(A) and log_events(env, "denial_not_escalated") == []
 
 
 def test_review_prompt_names_denials():
@@ -240,6 +301,9 @@ def test_goal_report_lists_denials_not_escalated(env):
     assert (x["handover"], x["team"], x["phase"], x["tool"]) == (A, "app", "apply", "PowerShell")
     report = goal_report(d.goal, "product")
     assert "## Permission denials not escalated" in report
+    [step] = [x for x in d.goal.steps if f" {A} " in x]
+    assert " finished (" in step and step.endswith("; 1 permission denial, not escalated)")
+    assert step in report and "waiting_for_owner" not in report
     assert (f"- {A} (app, apply): PowerShell `Get-CimInstance Win32_Process | Stop-Process -Force`"
             in report)
 

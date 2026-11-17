@@ -106,6 +106,12 @@ def test_fifo_pairing_by_team_handover_phase():
     assert got[B] == (ch.parse_time(at(10, 9, 5)), 1500, False)
 
 
+def test_finished_session_with_unescalated_denials():  # change finished-outcome-after-denial
+    recs = session(A, at(10, 9), at(10, 11), outcome="finished", denials=1, unescalated_denials=1)
+    [s] = ch.build_sessions(recs).sessions
+    assert (s.outcome, s.denials, s.running) == ("finished", 1, False)
+
+
 def test_unmatched_end_gets_start_from_duration():
     built = ch.build_sessions([end_rec(at(10, 10), A, duration=600)])
     (s,) = built.sessions

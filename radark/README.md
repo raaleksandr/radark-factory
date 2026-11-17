@@ -680,8 +680,12 @@ escalation.
   to wait for the owner is a permission denial is not escalated when it ended normally (exit 0, a result, hooks
   loaded, no time limit) and completed its phase during the session: propose, its change exists; apply or act, the
   worker marked `done` or `declined`; review, the handover was closed or returned to the worker; archive, the change
-  directory is gone. It is handled as `finished` (its `session_end` keeps the raw `waiting_for_owner`, then
-  `denial_not_escalated`). The worker's denials kept this way are named in the item's next review prompt, which asks
+  directory is gone. Its outcome is `finished`, decided before the session's end is reported, so the console end
+  line (and `console.log` and the goal report's steps), its `session_end` and its session entry in the item's record
+  all say `finished`; the end line names the denials, `→ finished (2 h 15 min; 1 permission denial, not escalated)`,
+  and `session_end` and the session entry carry `unescalated_denials` with their count (`denials` stays the count of
+  all denials); then `denial_not_escalated` is logged. `waiting_for_owner` is reported only for a session that really
+  waits for the owner. The worker's denials kept this way are named in the item's next review prompt, which asks
   the reviewer to check that nothing required was skipped because of them; they are dropped once that prompt is built. Progress since the item's first session: hub activity
   by the team on the handover or a new handover from it, new commits on any branch of the team repository, or more
   checked tasks in the change's `tasks.md` (uncommitted edits do not count). The repository part belongs to the team's

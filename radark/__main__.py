@@ -503,6 +503,13 @@ class Dispatcher:
                                                     base if since is None else base_of(rec, since),
                                                     phase=phase, ignored=ignored)
             r.progress_ignored = ignored[0] if ignored else None
+        if (work and r.outcome == "waiting_for_owner" and phase in PHASE_SIGNALS and denial_only(r)
+                and normal_end(r)):  # decided before the end is reported (finished-outcome-after-denial D1)
+            cand = sel.Candidate(kind="work", team=team, handover=handover, title=title or "", phase=phase,
+                                 recency="", team_index=0, change=rec.get("change"))
+            if self.phase_complete(cand, rec, r, since or r.started):
+                r.outcome = "finished"
+                r.unescalated_denials = len(r.denials)
         stopped = work and r.interrupt_cause == WRAP_UP
         if stopped:  # wrap-up W4 step 1
             grace, n = self.cfg.wrap_up_minutes, r.extensions_used
@@ -518,17 +525,21 @@ class Dispatcher:
                        escalations=len(r.markers_of("escalation")), timed_out=r.timed_out,
                        timeout_reason=r.timeout_reason, interrupt_cause=r.interrupt_cause,
                        progress_sources=r.progress_sources,
+                       **({"unescalated_denials": r.unescalated_denials} if r.unescalated_denials else {}),
                        stream=r.stream_path, result=r.result_text[-2000:])
-        self.out(end_line(team, phase, step, r, handover))  # always with the handover (parallel-sessions D4)
+        line = end_line(team, phase, step, r, handover)  # always with the handover (parallel-sessions D4)
+        self.out(line)
         if self.goal:
-            self.goal.steps.append(end_line(team, phase, step, r, handover))
+            self.goal.steps.append(line)
         if r.outcome == "error":
             self.problem(f"{what}: session ended with an error: {error_cause(r)}")
         if self.goal:
             self.goal_save()
         if work:
             rec["sessions"].append({"id": r.session_id, "team": team, "phase": phase, "outcome": r.outcome,
-                                    "started": r.started, "ended": r.ended, **({"base": base} if base else {})})
+                                    "started": r.started, "ended": r.ended, **({"base": base} if base else {}),
+                                    **({"unescalated_denials": r.unescalated_denials}
+                                       if r.unescalated_denials else {})})
         if not work:  # a step without a handover is handled by its caller right away
             self.drop_running()
         # a session cut by a limit before its hooks ran is a hang, not a broken hook setup
@@ -773,7 +784,7 @@ class Dispatcher:
         blocked = None
         if cand.phase in ("apply", "act") and r.outcome not in ("interrupted", "usage_limit"):  # no-loop N3
             blocked = prompts.parse_blocked(r.result_text) or prompts.parse_blocked(r.assistant_text)
-            if blocked and self.phase_complete(cand, rec, r, since or r.started):
+            if blocked and (r.unescalated_denials or self.phase_complete(cand, rec, r, since or r.started)):
                 blocked = None  # a completed phase is handled as before, whatever its last line says
             if blocked:
                 self.log.write("blocked_on_owner", team=team, handover=hid, session=r.session_id, phase=cand.phase,
@@ -782,10 +793,8 @@ class Dispatcher:
                 for s in rec["sessions"]:
                     if s.get("id") == r.session_id:
                         s["outcome"] = r.outcome
-        if (r.outcome == "waiting_for_owner" and not blocked and denial_only(r) and normal_end(r)
-                and self.phase_complete(cand, rec, r, since or r.started)):  # escalate-denial D1
+        if r.unescalated_denials:  # decided in session() (escalate-denial D1, finished-outcome-after-denial D2)
             self.denial_not_escalated(cand, rec, r)
-            r.outcome = "finished"
         if r.outcome == "waiting_for_owner":
             questions = [m.get("question") for m in r.markers_of("escalation")]
             reasons = [f"blocked on the owner: {blocked}"] if blocked else []
@@ -2337,8 +2346,10 @@ def end_line(team: str, phase: str, step: str | None, r: SessionResult, handover
     cause = (TIME_LIMIT.get(r.timeout_reason, r.timeout_reason) if r.timeout_reason
              else INTERRUPT_CAUSE.get(r.interrupt_cause, r.interrupt_cause) if r.interrupt_cause else None)
     outcome = r.outcome + (f", {cause}" if cause else "")
+    n = r.unescalated_denials
+    note = f"; {n} permission denial{'' if n == 1 else 's'}, not escalated" if n else ""
     return (f"{stamp()}  " + f" {sym('·')} ".join(step_parts(team, phase, step) + ([handover] if handover else []))
-            + f" {sym('→')} {outcome} ({duration_text(r.duration_s)})")
+            + f" {sym('→')} {outcome} ({duration_text(r.duration_s)}{note})")
 
 
 def error_cause(r: SessionResult) -> str:
@@ -2577,6 +2588,9 @@ def add_note(cfg: config_mod.Config, text: str) -> int:
                                           "this file starts with a goal check that passes the note to the "
                                           "product team."))
     return 0
+
+
+PHASE_SIGNALS = ("propose", "apply", "act", "review", "archive")  # phases with a completion signal (phase_complete)
 
 
 def denial_only(r: SessionResult) -> bool:

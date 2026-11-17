@@ -66,6 +66,7 @@ class SessionResult:
     recent: deque = field(default_factory=lambda: deque(maxlen=RECENT_EVENTS))
     running_tool: tuple | None = None
     limit_reason: str | None = None  # the product team's reason when its limit check judged the session hung
+    unescalated_denials: int = 0  # denials of a completed phase, not escalated (finished-outcome-after-denial D1)
     extensions_used: int = 0  # limit-check extensions granted before the last deadline (wrap-up W3)
     isolated: bool = True  # False: no job object / process group, only the process tree is ended (parallel D5)
 
