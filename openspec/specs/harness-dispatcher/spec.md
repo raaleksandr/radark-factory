@@ -1577,6 +1577,10 @@ The configuration SHALL set how many sessions may run at once (`[loop] parallel_
 - **WHEN** `parallel_sessions` is 2, `app` has an `apply` candidate and `backend` has an unrelated `propose` candidate
 - **THEN** both sessions run at the same time
 
+#### Scenario: Start records of sessions started together
+- **WHEN** `parallel_sessions` is 2 and the `app` and `backend` sessions are started at the same time
+- **THEN** both `session_start` records are written before either session's `session_end`, in either order
+
 #### Scenario: Default keeps one session
 - **WHEN** the configuration does not set `parallel_sessions` and two teams have candidates
 - **THEN** the dispatcher runs one of them and starts the other only after the first has ended
