@@ -47,7 +47,8 @@ version (radark-handover bumps it only for removed or renamed fields, changed ty
 codes). The engine supports contract **1**: the constant `SUPPORTED_HO_CONTRACTS` in `radark/hub.py` (a tuple, so
 one engine release can accept two contracts during a migration). A compatible `ho` adds the start line
 `ho: 0.2.0 (contract 1)` right after `Claude Code: ...` (`plan` prints no summary). `escalations`, `clear`, `keep`
-and `note` do not use the hub and skip the check.
+and `note` do not use the hub and skip the check. `python -m radark --version` reports the same needed contract and
+the `ho` found on `PATH` (10 s limit, no configuration read) without stopping: it always exits 0.
 
 The `ho` a release installs is the `radark-handover` tag pinned in `pyproject.toml`. The table
 `HO_RELEASE_CONTRACTS` in `radark/hub.py` maps each known tag to its contract, and the offline test
@@ -287,6 +288,7 @@ is dropped. Every variable is a string, empty when it does not apply:
 ## Commands
 
 ```
+python -m radark --version                              # engine version and the ho it needs (no configuration read)
 python -m radark [--config FILE] run                   # loop until STOP / Ctrl+C
 python -m radark run --goal goal.md [--max-sessions N] [--max-hours H] [--no-wait]   # goal run: work the goal to an end, report
 python -m radark note "<text>"                          # append a timestamped note to the goal run's file (no lock)

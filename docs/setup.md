@@ -47,15 +47,17 @@ separately: the two are released together (see "Compatibility of `ho`" in
 [radark/README.md](../radark/README.md#compatibility-of-ho)). Check:
 
 ```
-pip show radark-factory          # or: uv tool list — the installed version
+radark --version                 # e.g. radark 0.6.0 / ho: needs contract 1; found ho 0.2.0 (contract 1)
 radark --help                    # the commands: run, once, dry-run, plan, status, ...
 ho --version                     # e.g. ho 0.2.0 (contract 1)
 ho --version --json              # {"schema_version": 1, "version": "0.2.0", "contract": 1, ...}
 claude --version
 ```
 
-`radark` has no `--version` flag; `radark dry-run` (section 6) prints the Claude Code and `ho` versions in its start
-summary. The number after `contract` is the `ho` JSON contract; this release of the engine needs contract 1. If
+`radark --version` prints the installed engine version, the `ho` JSON contract it needs and the `ho` found on
+`PATH`; it reads no configuration and always exits 0. The `ho` a pipeline actually uses is the one in its
+configuration: `radark dry-run` (section 6) checks that one and prints the Claude Code and `ho` versions in its
+start summary. The number after `contract` is the `ho` JSON contract; this release of the engine needs contract 1. If
 `ho` is missing or has another contract, every `run` / `dry-run` stops with exit code 2 and one line such as
 `Configuration error: 'ho' (ho) was not found on PATH. This radark-factory needs an ho with JSON contract 1: ...`
 or `ho incompatible: ho 'ho' is version ... with JSON contract 2; this radark-factory needs contract 1. ...`; the

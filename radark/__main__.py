@@ -3006,14 +3006,28 @@ def slot_command(argv: list[str]) -> list[str] | None:
     return argv[i + 1:] if i < len(argv) and argv[i] == "test-slot" else None
 
 
+class VersionAction(argparse.Action):
+    """`--version`: print the engine version and the `ho` it needs and exit 0, before the subcommand check and before
+    any configuration is read (version-flag D4)."""
+
+    def __init__(self, option_strings, dest, **kwargs):
+        super().__init__(option_strings, dest, nargs=0, default=argparse.SUPPRESS, **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        from . import version
+        print("\n".join(version.lines()), flush=True)
+        parser.exit(0)
+
+
 def main(argv=None) -> int:
-    raw = list(sys.argv[1:] if argv is None else argv)
+    raw =list(sys.argv[1:] if argv is None else argv)
     if (cmd := slot_command(raw)) is not None:  # machine-wide-instances D8
         try:
             return machine_mod.run_test_slot(cmd)
         except KeyboardInterrupt:
             return 130
     p = argparse.ArgumentParser(prog="python -m radark", description=__doc__)
+    p.add_argument("--version", action=VersionAction, help="print the radark version and the ho it needs, then exit")
     p.add_argument("--config", default=None, metavar="FILE",
                    help="configuration file (default: radark.toml, or the legacy harness.toml, in the current "
                         "directory)")

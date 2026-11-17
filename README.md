@@ -71,6 +71,7 @@ These lines assume a hub, team repositories and a Claude Code login already exis
 
 ```
 uv tool install git+https://github.com/<owner>/radark-factory     # or: pip install .
+radark --version                                                     # the installed version and the ho it needs
 copy radark.toml.example D:\work\my-factory\radark.toml             # edit hub, teams, paths
 cd D:\work\my-factory
 radark dry-run                                                       # reads radark.toml here; run files in .radark\

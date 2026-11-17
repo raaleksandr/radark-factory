@@ -84,38 +84,66 @@ def contracts_text(supported=SUPPORTED_HO_CONTRACTS) -> str:
     return " or ".join(str(c) for c in supported)
 
 
-def check_ho(cmd: list[str], hub: Path, timeout: float = VERSION_TIMEOUT_S,
-             supported=SUPPORTED_HO_CONTRACTS, config_file: str = "the configuration file") -> HoVersion | str:
-    """Probe `ho --version --json` once at start (ho-contract-check D1-D3). Returns the found version, or the one
-    message that stops the dispatcher: missing, no answer, too old (no usable --version) or unsupported contract."""
-    shown, needed = " ".join(cmd), contracts_text(supported)
-    env = dict(os.environ, HO_HUB=str(hub))
+@dataclass(frozen=True)
+class HoProbe:
+    """One answer of `ho --version --json` (version-flag D3). kind: ok / missing / timeout / old / unsupported."""
+    kind: str
+    version: str | None = None
+    contract: int | None = None
+    features: tuple = ()
+    exit_code: int | None = None
+    error: str = ""
+
+
+def probe_ho(cmd: list[str], hub: Path | None, timeout: float = VERSION_TIMEOUT_S,
+             supported=SUPPORTED_HO_CONTRACTS) -> HoProbe:
+    """Run `ho --version --json` once and classify the answer. With `hub=None`, HO_HUB is left as the environment
+    has it (the version flag reads no configuration); HO_TEAM is always dropped."""
+    env = dict(os.environ)
+    if hub is not None:
+        env["HO_HUB"] = str(hub)
     env.pop("HO_TEAM", None)
     try:
         proc = subprocess.run(list(cmd) + ["--version", "--json"], capture_output=True, env=env, timeout=timeout,
                               stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
-        return (f"ho '{shown}' did not answer '--version --json' within {timeout:g} s. "
-                f"This radark-factory needs an ho with JSON contract {needed}.")
+        return HoProbe("timeout")
     except OSError as exc:
-        return (f"ho not found: cannot start '{shown}' ({exc}). This radark-factory needs an ho with JSON contract "
-                f"{needed}: install radark-handover with that contract, or fix 'ho' in {config_file}.")
+        return HoProbe("missing", error=str(exc))
     data = _json(proc.stdout.decode("utf-8", errors="replace"))
     version = data.get("version") if isinstance(data, dict) else None
     contract = data.get("contract", data.get("schema_version")) if isinstance(data, dict) else None
     if (proc.returncode != 0 or not isinstance(version, str) or not version
             or not isinstance(contract, int) or isinstance(contract, bool)):
-        how = f"exit {proc.returncode}" if proc.returncode != 0 else "no version in its answer"
+        return HoProbe("old", exit_code=proc.returncode)
+    features = data.get("features")
+    features = tuple(f for f in features if isinstance(f, str)) if isinstance(features, list) else ()
+    kind = "ok" if contract in supported else "unsupported"
+    return HoProbe(kind, version, contract, features, proc.returncode)
+
+
+def check_ho(cmd: list[str], hub: Path | None, timeout: float = VERSION_TIMEOUT_S,
+             supported=SUPPORTED_HO_CONTRACTS, config_file: str = "the configuration file") -> HoVersion | str:
+    """Probe `ho --version --json` once at start (ho-contract-check D1-D3). Returns the found version, or the one
+    message that stops the dispatcher: missing, no answer, too old (no usable --version) or unsupported contract."""
+    shown, needed = " ".join(cmd), contracts_text(supported)
+    probe = probe_ho(cmd, hub, timeout, supported)
+    if probe.kind == "timeout":
+        return (f"ho '{shown}' did not answer '--version --json' within {timeout:g} s. "
+                f"This radark-factory needs an ho with JSON contract {needed}.")
+    if probe.kind == "missing":
+        return (f"ho not found: cannot start '{shown}' ({probe.error}). This radark-factory needs an ho with JSON "
+                f"contract {needed}: install radark-handover with that contract, or fix 'ho' in {config_file}.")
+    if probe.kind == "old":
+        how = f"exit {probe.exit_code}" if probe.exit_code != 0 else "no version in its answer"
         return (f"ho '{shown}' has no --version ({how}): it is older than this radark-factory supports. "
                 f"Found: no version; needed: JSON contract {needed}. "
                 f"Install a radark-handover release that has 'ho --version' with contract {needed}.")
-    if contract not in supported:
-        return (f"ho '{shown}' is version {version} with JSON contract {contract}; this radark-factory needs "
-                f"contract {needed}. Install a radark-handover release with contract {needed}, "
-                f"or a radark-factory release that supports contract {contract}.")
-    features = data.get("features")
-    features = tuple(f for f in features if isinstance(f, str)) if isinstance(features, list) else ()
-    return HoVersion(version, contract, features)
+    if probe.kind == "unsupported":
+        return (f"ho '{shown}' is version {probe.version} with JSON contract {probe.contract}; this radark-factory "
+                f"needs contract {needed}. Install a radark-handover release with contract {needed}, "
+                f"or a radark-factory release that supports contract {probe.contract}.")
+    return HoVersion(probe.version, probe.contract, probe.features)
 
 
 _BY_EXIT = {1: HoUsageError, 2: HoNotFound, 3: HoLifecycleError, 4: HoIntegrityError}
