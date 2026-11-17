@@ -38,7 +38,7 @@ The Hub section SHALL link to the radark-handover README for a hub shared throug
 - **THEN** it states the team's role, hub and team, `ho sync` first and last, the owner-only actions and the decisions the team takes, and the workflow profile
 
 ### Requirement: Configuration and first dry run in the guide
-The Configuration section SHALL start from `radark.toml.example`, name the minimum keys to edit and where the run directory goes, and mention `machine.toml` only for several pipelines on one computer. The First dry run section SHALL show a short neutral example of a healthy `radark dry-run` output, whose Claude Code line shows the login state, and the common errors with their fix: hub not found, team path wrong, `ho` incompatible, Claude Code not found or not logged in. The "NOT logged in" line SHALL be listed with its fix (run `claude` and log in) and marked as a warning that does not stop the start. The guide SHALL NOT say that `dry-run` does not check the Claude Code login.
+The Configuration section SHALL start from `radark.toml.example`, obtained with `radark example-config` from the installed package (the guide SHALL NOT say it is not installed with the package or require the repository for it), name the minimum keys to edit and where the run directory goes, and mention `machine.toml` (obtained with `radark example-config --machine`) only for several pipelines on one computer. The First dry run section SHALL show a short neutral example of a healthy `radark dry-run` output, whose Claude Code line shows the login state, and the common errors with their fix: hub not found, team path wrong, `ho` incompatible, Claude Code not found or not logged in. The "NOT logged in" line SHALL be listed with its fix (run `claude` and log in) and marked as a warning that does not stop the start. The guide SHALL NOT say that `dry-run` does not check the Claude Code login.
 
 #### Scenario: A common error
 - **WHEN** `radark dry-run` stops because a team `repo` path does not exist
@@ -47,6 +47,10 @@ The Configuration section SHALL start from `radark.toml.example`, name the minim
 #### Scenario: Not logged in
 - **WHEN** a user's `radark dry-run` summary says `NOT logged in`
 - **THEN** the guide's common errors show that line, say it is a warning that does not stop the start, and tell them to run `claude` and log in
+
+#### Scenario: Example configuration after install
+- **WHEN** a user who installed radark-factory without cloning the repository follows the Configuration section
+- **THEN** the guide tells them to run `radark example-config -o radark.toml` in the pipeline folder, and says that it does not overwrite an existing file
 
 ### Requirement: Sandbox and first real run in the guide
 The sandbox section SHALL show how to try the whole loop on a throw-away hub and throw-away repositories first, using what the engine has today without a new command. The First real run section SHALL cover `radark run` and `--until`, where to watch (the console, `console.log`, the cockpit), how to answer an escalation, and what the engine never does on its own (push, publish, pay).
