@@ -21,6 +21,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from . import banner
 from . import config as config_mod
 from . import forecast
 from . import machine as machine_mod
@@ -3082,6 +3083,7 @@ def main(argv=None) -> int:
         print(f"Machine error: {exc}; not starting.", file=sys.stderr)
         return 2
     record_pipeline(d, directory)
+    print(banner.BANNER)  # start-banner D2: once per start, after every check that refuses a start
     print(config_mod.summary(cfg, config_mod.claude_version(cfg), ho.line()))
     try:
         config_mod.check_owner(cfg, d.hub.teams())

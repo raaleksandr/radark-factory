@@ -414,7 +414,9 @@ not need the window: it follows the run through the run directory (`runs.jsonl` 
 goal run's status, `sessions/<run-id>.jsonl` for a session's full stream) and can wait for the end with a monitor
 on `goal.json` (`status` other than `running`). Everything the window shows is also appended to `<run_dir>/console.log` (UTF-8,
 a `==== <local time>  PID <pid>  <arguments>` header per start; `run` and `once` only, not `dry-run`), so Claude
-Code sees the same lines, the goal report and any traceback with a `tail -f` on that file. Both of you steer the run through files: `PAUSE`, `STOP` and
+Code sees the same lines, the goal report and any traceback with a `tail -f` on that file. `run`, `once` and
+`dry-run` begin their start output with a static ASCII banner (`radark/banner.py`, RA DARK FACTORY over a factory;
+printable ASCII, at most 80 columns, no switch to turn it off), printed only when the start passed its checks. Both of you steer the run through files: `PAUSE`, `STOP` and
 `python -m radark note "<text>"`; Ctrl+C in the window is yours.
 
 `run` and `once` turn off QuickEdit of their console window at start: in a classic Windows console a click in the
