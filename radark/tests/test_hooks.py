@@ -175,3 +175,56 @@ def test_guard_hook_registered_for_shell_and_file_tools(env):
     assert set(guarded) == {"Bash", "PowerShell", "Write", "Edit"}
     for h in guarded.values():
         assert h["type"] == "command" and h["args"][0].endswith("guard.py") and len(h["args"]) == 1
+
+
+# ---- wrap-up on demand (owner-wrap-up-on-demand D4)
+
+def wrap_request(run_dir, sessions):
+    (run_dir / "wrap-up-request.json").write_text(json.dumps({"run": 1, "requested": "x", "sessions": sessions}))
+
+
+def test_post_tool_use_without_a_request_does_nothing(run_dir):
+    assert hook("post_tool_use.py", {"tool_name": "Bash"}, run_dir) is None
+    assert markers(run_dir) == []
+
+
+def test_post_tool_use_delivers_the_text_once(run_dir):
+    wrap_request(run_dir, {"run-1": "WRAP UP NOW", "run-2": "OTHER"})
+    out = hook("post_tool_use.py", {"tool_name": "Bash", "tool_input": {"command": "pytest"}}, run_dir)
+    assert out == {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "WRAP UP NOW"}}
+    (m,) = markers(run_dir)
+    assert (m["event"], m["source"], m["tool_name"]) == ("owner_wrap_up", "tool", "Bash")
+    assert hook("post_tool_use.py", {"tool_name": "Read"}, run_dir) is None
+    assert len(markers(run_dir)) == 1
+
+
+def test_post_tool_use_skips_unlisted_sessions_and_subagent_calls(run_dir):
+    wrap_request(run_dir, {"run-2": "OTHER"})
+    assert hook("post_tool_use.py", {"tool_name": "Bash"}, run_dir) is None
+    wrap_request(run_dir, {"run-1": "WRAP UP NOW"})
+    assert hook("post_tool_use.py", {"tool_name": "Bash", "agent_id": "sub-1", "agent_type": "Explore"},
+                run_dir) is None
+    assert markers(run_dir) == []
+
+
+def test_stop_delivers_the_text_instead_of_the_nudge_then_lets_the_session_stop(run_dir):
+    wrap_request(run_dir, {"run-1": "WRAP UP NOW"})
+    data = {"stop_hook_active": True, "last_assistant_message": "Done for now."}
+    assert hook("stop.py", data, run_dir) == {"decision": "block", "reason": "WRAP UP NOW"}
+    (m,) = markers(run_dir)
+    assert (m["event"], m["source"]) == ("owner_wrap_up", "stop")
+    assert hook("stop.py", {"stop_hook_active": False, "last_assistant_message": "Saved."}, run_dir) is None
+    assert [m["event"] for m in markers(run_dir)] == ["owner_wrap_up"]  # no nudge
+
+
+def test_stop_of_an_unlisted_session_nudges_as_before(run_dir):
+    wrap_request(run_dir, {"run-2": "OTHER"})
+    out = hook("stop.py", {"stop_hook_active": False, "last_assistant_message": "Done."}, run_dir)
+    assert out["decision"] == "block" and out["reason"] != "OTHER"
+    assert [m["event"] for m in markers(run_dir)] == ["nudge"]
+
+
+def test_post_tool_use_hook_is_installed_for_every_tool(env):
+    settings = json.loads(runner_mod.write_session_settings(env.cfg()).read_text())
+    (group,) = settings["hooks"]["PostToolUse"]
+    assert "matcher" not in group and group["hooks"][0]["args"][0].endswith("post_tool_use.py")

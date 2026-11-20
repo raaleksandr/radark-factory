@@ -29,6 +29,9 @@ TEMP_VARS = ("TEMP", "TMP", "TMPDIR")  # point to the session temp directory (fe
 WRAP_UP = "wrap_up"  # `on_deadline` answer: stop the session and resume it with a wrap-up prompt (wrap-up W3)
 END_TIME = "end_time"  # interrupt cause of a session stopped at a strict end time (strict-end-time D2)
 STOP = "stop"  # `on_end_at` answer: stop the session at its end moment
+OWNER_WRAP_UP = "owner_wrap_up"  # interrupt cause of a session ended by a wrap-up on demand (owner-wrap-up D5)
+OWNER_STOP = "owner_stop"  # `on_tick` / `on_deadline` answer: end the session (cause `owner_wrap_up`)
+OWNER_HARD = "owner_hard"  # the same, and the dispatcher resumes it with the owner's wrap-up prompt
 
 
 @dataclass
@@ -71,6 +74,7 @@ class SessionResult:
     unescalated_denials: int = 0  # denials of a completed phase, not escalated (finished-outcome-after-denial D1)
     extensions_used: int = 0  # limit-check extensions granted before the last deadline (wrap-up W3)
     isolated: bool = True  # False: no job object / process group, only the process tree is ended (parallel D5)
+    owner_hard: bool = False  # stopped by a wrap-up on demand before the text reached it: resume it (owner D5)
 
     def markers_of(self, event: str) -> list[dict]:
         return [m for m in self.markers if m.get("event") == event]
@@ -85,6 +89,7 @@ def write_session_settings(cfg: Config) -> Path:
         "SessionStart": [{"hooks": [entry("session_start.py")]}],
         "PreToolUse": [{"matcher": "AskUserQuestion", "hooks": [entry("ask_user_question.py")]}]
                       + [{"matcher": tool, "hooks": [entry("guard.py")]} for tool in GUARDED_TOOLS],
+        "PostToolUse": [{"hooks": [entry("post_tool_use.py")]}],  # every tool: wrap-up on demand (owner D4)
         "Stop": [{"hooks": [entry("stop.py")]}],
         "StopFailure": [{"hooks": [entry("stop_failure.py")]}],
     }}
@@ -327,7 +332,7 @@ class Runner:
             timeout_s: float | None = None, idle_s: float | None = None,
             session_id: str | None = None, on_usage=None, on_start=None, sleep_check=None,
             grace_s: float | None = None, on_deadline=None, on_deadline_abort=None, end_at: float | None = None,
-            on_end_at=None) -> SessionResult:
+            on_end_at=None, on_tick=None) -> SessionResult:
         """`on_usage(window, utilization, resets_at)` is called from the stream thread for every usage reading;
         `on_start(session_id, run_id, pid)` right after the process starts; `sleep_check()` (a `Sleep` or None)
         every loop iteration: after a sleep a session silent for `grace_s` is ended as interrupted (design D3).
@@ -337,7 +342,10 @@ class Runner:
         `on_deadline_abort()` is called when the session ends while it runs (check-session-at-time-limit D1).
         `end_at`: a wall-clock moment (epoch seconds); once `wall()` reaches it, `on_end_at(result)` is called once in
         this thread: `STOP` ends the session as interrupted with cause `end_time` and no limit check starts after
-        it, anything else lets it go on (strict-end-time D2)."""
+        it, anything else lets it go on (strict-end-time D2).
+        `on_tick(result)` is called in this thread at most once a second: `OWNER_STOP` / `OWNER_HARD` end the session
+        as interrupted with cause `owner_wrap_up` (the latter sets `owner_hard`); `on_deadline` may answer the same
+        (owner-wrap-up-on-demand D5)."""
         session_id = resume or session_id or str(uuid.uuid4())
         run_id = session_id if not resume else f"{session_id}-r{int(time.time())}"
         repo = self.cfg.team(team).repo
@@ -377,7 +385,23 @@ class Runner:
         woke = None  # awake time of a wake seen during this session, until the session shows a sign of life
         check, answer, expired = None, [], False  # thread of a pending deadline check and its answer
         end_asked = end_at is None
+        next_tick = 0.0  # time.monotonic() of the next `on_tick` call
+
+        def owner_stop(hard: bool) -> None:
+            r.interrupt_cause, r.owner_hard = OWNER_WRAP_UP, hard
+            self._end()
+
         while self.proc.poll() is None:
+            if (on_tick is not None and r.timeout_reason is None and r.interrupt_cause is None
+                    and time.monotonic() >= next_tick):
+                next_tick = time.monotonic() + 1.0
+                try:
+                    tick = on_tick(r)
+                except Exception:  # a failing callback leaves the session running
+                    tick = None
+                if tick in (OWNER_STOP, OWNER_HARD):
+                    expired = True  # no limit check after it; a running one is aborted below
+                    owner_stop(tick == OWNER_HARD)
             if not end_asked and r.timeout_reason is None and r.interrupt_cause is None and self.wall() >= end_at:
                 end_asked = True
                 try:
@@ -395,7 +419,11 @@ class Runner:
                 woke = None
             if check is not None and not check.is_alive():
                 check = None
-                if answer and answer[0] == WRAP_UP:
+                if answer and answer[0] in (OWNER_STOP, OWNER_HARD):
+                    if r.timeout_reason is None and r.interrupt_cause is None:
+                        owner_stop(answer[0] == OWNER_HARD)
+                    expired = True
+                elif answer and answer[0] == WRAP_UP:
                     if r.timeout_reason is None and r.interrupt_cause is None:
                         r.interrupt_cause = WRAP_UP
                         self._end()

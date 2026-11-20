@@ -1,5 +1,6 @@
 """Stop hook (design D3): let a referred or escalated session end, refer plain-text questions of
-triaged teams, otherwise nudge once with "continue"."""
+triaged teams, otherwise nudge once with "continue". With a wrap-up on demand for this session the wrap-up text
+replaces the nudge once, and a session that got it is let stop (owner-wrap-up-on-demand D4)."""
 import json
 import re
 from pathlib import Path
@@ -56,6 +57,11 @@ def question_part(text: str) -> str | None:
 
 def decide(data: dict, e: dict, cfg: dict) -> tuple[str | None, dict | None, dict]:
     """Return (marker event or None, decision JSON or None to allow the stop, marker fields)."""
+    text = hc.wrap_up_text(e)
+    if text is not None:  # a wrap-up on demand: delivered once, then the session ends with its own last message
+        if hc.wrap_up_delivered(e):
+            return None, None, {}
+        return hc.DELIVERED, {"decision": "block", "reason": text}, {"source": "stop"}
     if data.get("stop_hook_active") or e.get("phase") in ("consult", "limit_check"):  # consultations are one-shot
         return None, None, {}
     if any(m.get("event") in ("question", "escalation") for m in hc.read_markers(e)):

@@ -320,3 +320,38 @@ def test_escalation_body_lists_denials_and_a_text_question():
                                    denied=[{"tool": "Bash", "input": "curl x"}, {"tool": "Write", "input": "{}"}])
     assert "## Question\n\n> How should the team go on?" in body
     assert "## Denied\n\n- Bash: `curl x`\n- Write: `{}`" in body
+
+
+# ---- wrap-up on demand (owner-wrap-up-on-demand D7)
+
+def test_owner_wrap_up_text_for_apply():
+    text = prompts.owner_wrap_up_message(cand("apply", change="add-export"), 15)
+    assert text.startswith("The owner asked this run to wrap up now (handover HO-20261016-ab12, phase apply). Do not "
+                           "start new work.")
+    assert "wait for it and use its result; do not start another one" in text
+    assert "You have 15 min after this message; then the session is stopped." in text
+    assert "Commit what works." in text and "`tasks.md`" in text and "`Left for a later run` note" in text
+    assert "Do not report handover HO-20261016-ab12 as done unless the phase is complete" in text
+    assert prompts.STANDING_RULE in text and "index.lock" not in text
+
+
+def test_owner_wrap_up_text_for_other_phases_and_hard_variant():
+    text = prompts.owner_wrap_up_message(cand("propose"), 10)
+    assert "Say what is left on a line starting `Left:`" in text and "tasks.md" not in text
+    hard = prompts.owner_wrap_up_message(cand("apply"), 10, hard="within", index_lock=True)
+    assert hard.startswith("The owner asked this run to wrap up now, and the dispatcher stopped this session before "
+                           "the request could reach it, in the apply phase of handover HO-20261016-ab12. You now have "
+                           "10 min to wrap up")
+    assert "`.git/index.lock` (one exists now)" in hard and "Start no new work. Commit what works." in hard
+    assert "at its time limit" in prompts.owner_wrap_up_message(cand("apply"), 10, hard="max_time")
+
+
+def test_end_time_wrap_up_text_is_unchanged():
+    text = prompts.end_time_wrap_up_message(cand("apply"), "12:00", 15)
+    assert ("Start no new work. Commit what works. Check off the finished tasks in the change's `tasks.md` and write "
+            "the open ones under a `Left for a later run` note there. Do not report handover HO-20261016-ab12 as done "
+            "unless the phase is complete; the next run resumes this session where you stop.") in text
+
+
+def test_owner_wrap_up_interrupt_label():
+    assert prompts.INTERRUPT_LABELS["owner_wrap_up"].startswith("The owner asked the previous run to wrap up")

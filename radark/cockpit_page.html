@@ -675,6 +675,11 @@ function nowCard(c) {
     box.appendChild(c.goal ? el("div", {cls: "now-line"}, [el("span", {cls: "badge goal", text: "Goal run"}),
       el("span", {text: " " + (c.goal.name || "?") + " since " + local(c.goal.started)})])
       : nowLine("", "Regular run"));
+    if (c.wrap_up_pending) {  // owner-wrap-up-on-demand D9
+      const w = new Date(c.wrap_up_pending);
+      box.appendChild(nowLine("", "wrap-up pending since " + (isNaN(w) ? String(c.wrap_up_pending) :
+        w.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", hour12: false}))));
+    }
   }
   if (c.running && c.running.length) {
     box.appendChild(el("div", {cls: "now-line muted", text: c.state === "running" ?

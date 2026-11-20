@@ -371,3 +371,26 @@ def test_page_served_has_the_now_tab(env, start):
     status, _, body = start().request("GET", "/")
     html = body.decode("utf-8")
     assert status == 200 and 'id="tab-now"' in html and "coming later" not in html
+
+
+# ---- pending wrap-up on demand (owner-wrap-up-on-demand D9)
+
+def test_now_pending_wrap_up(machine_home, inst):
+    inst.add("/pipelines/alpha/radark.toml")
+    requested = {"time": at(11, 5), "event": "owner_wrap_up_requested", "requested": "x", "within_min": None,
+                 "sessions": []}
+    recs = [boot(at(8)), start_rec(at(9), A), requested]
+    assert cards_of(machine_home, pipe("alpha", records=recs))["alpha"]["wrap_up_pending"] == at(11, 5)
+    done = recs + [{"time": at(11, 20), "event": "owner_wrap_up_done", "sessions": []}]
+    assert cards_of(machine_home, pipe("alpha", records=done))["alpha"]["wrap_up_pending"] is None
+    earlier = [boot(at(8)), requested, boot(at(11, 30))]  # before the last start: not this run's
+    assert cards_of(machine_home, pipe("alpha", records=earlier))["alpha"]["wrap_up_pending"] is None
+
+
+def test_now_pending_wrap_up_only_on_a_running_card(machine_home):
+    recs = [boot(at(8)), {"time": at(11, 5), "event": "owner_wrap_up_requested"}]
+    assert cards_of(machine_home, pipe("alpha", records=recs))["alpha"]["wrap_up_pending"] is None
+
+
+def test_page_shows_the_pending_wrap_up():
+    assert "wrap-up pending since " in (Path(cn.__file__).parent / "cockpit_page.html").read_text(encoding="utf-8")

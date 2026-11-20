@@ -2,6 +2,8 @@
 hooks named in the --settings file, so hook scripts and runner are tested together.
 
 Scenario: {"steps": [{"hook": "SessionStart"} | {"hook": "PreToolUse", "input": {...}}
+                     | {"hook": "PostToolUse", "input": {...}, "wait_for": path} (a long tool call that returns once
+                       the test creates the file; its hook output is recorded as a `fake_hook` line)
                      | {"hook": "Stop", "input": {...}} | {"hook": "StopFailure", "input": {...}}
                      | {"emit": {...}} | {"text": "..."} | {"sleep": s} (a silent stream)
                      | {"usage": {window: [utilization, resets_at]}, "status": "allowed"} (a rate_limit_event)
@@ -15,7 +17,7 @@ Scenario: {"steps": [{"hook": "SessionStart"} | {"hook": "PreToolUse", "input": 
                      | {"detach": pid file} (start a background process whose parent exits at once)],
            "result": {...} | null, "exit": 0}
 FAKE_CLAUDE_SCENARIOS may also hold {team: [scenarios]}: each team (HARNESS_TEAM) plays its own list.
-A Stop hook that blocks is recorded in the stream as {"type": "fake_hook", ...}.
+Any hook output (a Stop hook that blocks, PostToolUse context) is recorded in the stream as {"type": "fake_hook", ...}.
 Each call (argv, cwd, selected env) is appended to FAKE_CLAUDE_SCENARIOS + ".calls".
 `auth status --json` is answered first, from FAKE_CLAUDE_AUTH (claude-login-state D7): `in` (default), `out`,
 `missing`, `garbage`, `sleep`; each such probe appends a line to FAKE_CLAUDE_SCENARIOS + ".auth" (not to ".calls")."""
@@ -111,6 +113,10 @@ def run_hook(name, payload):
 out({"type": "system", "subtype": "init", "session_id": session})
 for step in scenario.get("steps", []):
     if "hook" in step:
+        if "wait_for" in step:  # a long tool call: the hook (e.g. PostToolUse) runs once the file exists, at most 30 s
+            end = time.monotonic() + step.get("within", 30)
+            while not os.path.exists(step["wait_for"]) and time.monotonic() < end:
+                time.sleep(0.05)
         payload = {"session_id": session, "hook_event_name": step["hook"], **step.get("input", {})}
         run_hook(step["hook"], payload)
     elif "usage" in step:

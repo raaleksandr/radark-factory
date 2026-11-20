@@ -259,15 +259,49 @@ def end_time_wrap_up_message(c: Candidate, until: str, grace: float, index_lock:
         "that was running was cut off: the working tree may hold a partial edit, and an interrupted git command may "
         "have left a stale `.git/index.lock`" + (" (one exists now)" if index_lock else "")
         + ". Check `git status` and your last step first: finish the partial step only if it is quick, otherwise undo "
-        "it (remove the lock only if no git process is running). Start no new work. Commit what works. "
+        "it (remove the lock only if no git process is running). Start no new work. " + _save_and_stop(c)
     )
+    p = _profile(profile)
+    return _with_rule(text, goal, rule=p.render("standing-rule", template_values(c, p)))
+
+
+def _save_and_stop(c: Candidate) -> str:
+    """The common end of the end-time and the on-demand wrap-up texts: save the work, say what is left, no `ho done`
+    unless the phase is complete (owner-wrap-up-on-demand D7)."""
+    text = "Commit what works. "
     if c.phase == "apply":
         text += ("Check off the finished tasks in the change's `tasks.md` and write the open ones under a "
                  "`Left for a later run` note there. ")
     else:
         text += "Say what is left on a line starting `Left:` in your final message. "
-    text += (f"Do not report handover {c.handover} as done unless the phase is complete; the next run resumes this "
-             "session where you stop.")
+    return text + (f"Do not report handover {c.handover} as done unless the phase is complete; the next run resumes "
+                   "this session where you stop.")
+
+
+def owner_wrap_up_message(c: Candidate, grace: float, goal: str | None = None, profile: Profile | None = None, *,
+                          hard: str | None = None, index_lock: bool = False) -> str:
+    """The wrap-up on demand (owner-wrap-up-on-demand D7). Delivered between tool calls, or, `hard` (why the session
+    was stopped first: `within`, `max_time`), as the prompt that resumes a session stopped before the text reached
+    it."""
+    if hard is None:
+        text = (
+            f"The owner asked this run to wrap up now (handover {c.handover}, phase {c.phase}). Do not start new work. "
+            "If a command you started (also in the background, e.g. a test run) is still running, wait for it and use "
+            f"its result; do not start another one. You have {grace:g} min after this message; then the session is "
+            "stopped. Check `git status`. "
+        )
+    else:
+        why = "at its time limit" if hard == "max_time" else "before the request could reach it"
+        text = (
+            f"The owner asked this run to wrap up now, and the dispatcher stopped this session {why}, in the "
+            f"{c.phase} phase of handover {c.handover}. You now have {grace:g} min to wrap up; after that the session "
+            "is stopped. The step that was running was cut off: the working tree may hold a partial edit, and an "
+            "interrupted git command may have left a stale `.git/index.lock`" + (" (one exists now)" if index_lock
+                                                                                 else "")
+            + ". Check `git status` and your last step first: finish the partial step only if it is quick, otherwise "
+            "undo it (remove the lock only if no git process is running). Start no new work. "
+        )
+    text += _save_and_stop(c)
     p = _profile(profile)
     return _with_rule(text, goal, rule=p.render("standing-rule", template_values(c, p)))
 
@@ -284,6 +318,8 @@ INTERRUPT_LABELS = {
                           "restarted)",
     "end_time": "The previous run reached its end time and the dispatcher stopped this session (it may have wrapped "
                 "up: see your last messages and tasks.md)",
+    "owner_wrap_up": "The owner asked the previous run to wrap up, and this session ended (it may have wrapped up "
+                     "already: see your last messages and tasks.md)",
 }
 
 

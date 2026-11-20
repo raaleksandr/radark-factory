@@ -218,7 +218,8 @@ def test_pause_ends_at_the_end_time(env, monkeypatch):
 def test_nap_without_end_time_sleeps_in_full(env, monkeypatch):
     clock = Clock(monkeypatch, sleep=True)
     disp(env).nap(120)
-    assert clock.naps == [120]
+    # in steps of at most 1 s, so a wrap-up request ends the wait (owner-wrap-up-on-demand D2)
+    assert sum(clock.naps) == pytest.approx(120) and max(clock.naps) <= 1.0
 
 
 # ---- reporting (tasks 2.1, 2.2)

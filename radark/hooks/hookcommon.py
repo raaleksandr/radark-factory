@@ -81,6 +81,30 @@ def read_markers(e: dict) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+WRAP_UP_REQUEST = "wrap-up-request.json"  # written by the dispatcher once it sees a wrap-up on demand
+DELIVERED = "owner_wrap_up"  # marker: the wrap-up text reached this session (owner-wrap-up-on-demand D4)
+
+
+def wrap_up_text(e: dict) -> str | None:
+    """The wrap-up on demand text the dispatcher listed for this session run ID, else None (one `stat` when no
+    request exists)."""
+    if not e["run_dir"]:
+        return None
+    path = Path(e["run_dir"]) / WRAP_UP_REQUEST
+    if not path.is_file():
+        return None
+    try:
+        sessions = json.loads(path.read_text(encoding="utf-8")).get("sessions") or {}
+    except (OSError, ValueError, AttributeError):
+        return None
+    text = sessions.get(e["run_id"]) if isinstance(sessions, dict) else None
+    return text if isinstance(text, str) and text else None
+
+
+def wrap_up_delivered(e: dict) -> bool:
+    return any(m.get("event") == DELIVERED for m in read_markers(e))
+
+
 def _fold(s: str) -> str:
     return s.lower().replace("ё", "е")
 

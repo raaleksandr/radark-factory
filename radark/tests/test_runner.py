@@ -409,3 +409,32 @@ def test_denial_rule_names_the_team_temp_dir_and_blocked_format(env):
     assert "`BLOCKED: owner — denied: <command>; needed for: <why>; suggestion: <what you propose>`" in text
     assert text.index("Long waits:") < text.index("Denied commands:")
 
+
+
+# ---- wrap-up on demand: the per-tick callback (owner-wrap-up-on-demand D5)
+
+def test_tick_answers_stop_and_hard_end_the_session_as_owner_wrap_up(env):
+    for answer, hard in ((runner_mod.OWNER_STOP, False), (runner_mod.OWNER_HARD, True)):
+        ticks = []
+
+        def on_tick(r):
+            ticks.append(time.monotonic())
+            return answer if len(ticks) >= 2 else None
+        r = run(env, [{"steps": [START, {"active": 30, "every": 0.2}], "result": {}}], idle_s=60, on_tick=on_tick)
+        assert r.outcome == "interrupted" and r.interrupt_cause == "owner_wrap_up" and r.owner_hard is hard
+        assert not r.timed_out and r.duration_s < 20
+        assert len(ticks) == 2 and ticks[1] - ticks[0] >= 0.9  # at most once a second
+
+
+def test_tick_answering_nothing_or_failing_leaves_the_session(env):
+    def on_tick(r):
+        raise RuntimeError("x")
+    r = run(env, [{"steps": [START, {"active": 1.5, "every": 0.2}], "result": {"result": "Done."}}], idle_s=60,
+            on_tick=on_tick)
+    assert r.outcome == "finished" and r.interrupt_cause is None
+
+
+def test_deadline_answer_owner_hard_ends_the_session(env):
+    r = run(env, [{"steps": [START, {"active": 30, "every": 0.2}], "result": {}}], timeout_s=1, idle_s=60,
+            on_deadline=lambda r, elapsed: runner_mod.OWNER_HARD)
+    assert r.interrupt_cause == "owner_wrap_up" and r.owner_hard and r.timeout_reason is None

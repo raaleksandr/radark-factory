@@ -166,11 +166,16 @@ def _facts(records: list[dict], built: history_mod.Built) -> dict:
     for n, rec in enumerate(records):
         if rec.get("event") == "dispatcher_start":
             start_index, start_at = n, history_mod.parse_time(rec.get("time"))
+    wrap_at = None  # a wrap-up on demand seen by this run and not done yet (owner-wrap-up-on-demand D9)
     for rec in records[start_index + 1:]:
         if rec.get("event") == "stop":
             stop_at = history_mod.parse_time(rec.get("time")) or stop_at
+        elif rec.get("event") == "owner_wrap_up_requested":
+            wrap_at = history_mod.parse_time(rec.get("time")) or wrap_at
+        elif rec.get("event") == "owner_wrap_up_done":
+            wrap_at = None
     return {"last_event": last_event, "last_session": last_session, "last_start": iso(start_at),
-            "last_stop": iso(stop_at)}
+            "last_stop": iso(stop_at), "wrap_up_pending": iso(wrap_at)}
 
 
 def card(p: PipelineNow, instances: list[Instance], now: dt.datetime) -> dict:
@@ -178,7 +183,7 @@ def card(p: PipelineNow, instances: list[Instance], now: dt.datetime) -> dict:
     out = {"name": p.name, "state": NOT_RUNNING, "message": None, "log": p.log.state if p.log else None,
            "instances": [i.to_json() for i in instances], "goal": None, "last_goal": None, "running": [],
            "last_event": None, "last_session": None, "last_start": None, "last_stop": None,
-           "hub_error": p.hub_error}
+           "wrap_up_pending": None, "hub_error": p.hub_error}
     if p.state == "missing":
         return {**out, "state": UNKNOWN, "message": "configuration file not found"}
     if p.state != "ok" or p.log is None:
@@ -189,6 +194,8 @@ def card(p: PipelineNow, instances: list[Instance], now: dt.datetime) -> dict:
     out.update(_facts(p.log.records, built))
     running = bool(instances)
     out["state"] = RUNNING if running else NOT_RUNNING
+    if not running:  # a pending wrap-up belongs to a running dispatcher only
+        out["wrap_up_pending"] = None
     g = p.goal if isinstance(p.goal, dict) else None
     if g:
         pids = {i.pid for i in instances}

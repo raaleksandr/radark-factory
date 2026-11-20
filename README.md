@@ -76,6 +76,7 @@ radark example-config -o D:\work\my-factory\radark.toml          # the example; 
 cd D:\work\my-factory
 radark dry-run                                                       # reads radark.toml here; run files in .radark\
 radark run
+radark wrap-up                                                       # later: finish the current command, save, stop
 ```
 
 Pipelines set up before this name change keep working unchanged: without `radark.toml` the dispatcher reads the
@@ -123,7 +124,8 @@ The **Now** tab shows what the pipelines are doing right now: one card per pipel
 A card is `running` (a live dispatcher instance on this computer belongs to the pipeline; its start and PID are
 shown), `not running`, or `unknown` (its configuration or run log cannot be read); it says **Goal run** with the goal
 file's name and start, or **Regular run**; it lists the sessions running now (team, handover ID, title, phase, since,
-for how long; sessions left open by a dispatcher that is gone are listed as interrupted) and the newest run-log event;
+for how long; sessions left open by a dispatcher that is gone are listed as interrupted), a pending wrap-up on
+demand (`wrap-up pending since HH:MM`) and the newest run-log event;
 a card that is not running also shows the last session's end and outcome, the last start and the stop, when
 recorded. A line on top shows the session slots in use against the machine limit, the running pipelines and the
 instances that belong to no shown pipeline. Now reads the machine directory's instance records (`instances/*.json`,

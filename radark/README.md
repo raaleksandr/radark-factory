@@ -89,7 +89,7 @@ A limit check and a triage consultation run next to the session they serve and d
 - **Workers:** each session runs in its own worker thread to its end (limit check, wrap-up, triage, escalation,
   review hand-off, after-session update); state, run log, console and goal record are written under one lock, whole
   lines only. One runner per team.
-- **Run control:** `PAUSE`, `STOP`, `--until`, the usage budget, the usage hold, a usage-limit back-off, the goal
+- **Run control:** `PAUSE`, `STOP`, a wrap-up on demand (`wrap-up`), `--until`, the usage budget, the usage hold, a usage-limit back-off, the goal
   run's limits and Ctrl+C stop **new** starts; the running sessions finish and are processed, and the run ends after
   the last one (`No new session (<why>); waiting for N running sessions.`). A usage-limit hit of one session sets the
   back-off for new starts; the other session goes on. Ctrl+C twice ends every running session (`interrupted`, cause
@@ -298,6 +298,7 @@ python -m radark --version                              # engine version and the
 python -m radark [--config FILE] run                   # loop until STOP / Ctrl+C
 python -m radark run --goal goal.md [--max-sessions N] [--max-hours H] [--no-wait]   # goal run: work the goal to an end, report
 python -m radark note "<text>"                          # append a timestamped note to the goal run's file (no lock)
+python -m radark wrap-up [--within MIN]                 # ask the running run to wrap up now (see Pause / stop)
 python -m radark run --once   |  once                   # one work item (session + any triage), then exit
 python -m radark run [--budget-5h PCT] [--budget-7d PCT] # this run only: end once a window is used PCT % (see Usage guard)
 python -m radark run --until 07:00                      # this run only: start no new step from 07:00 on (see Pause / stop)
@@ -377,6 +378,26 @@ end time plus `wrap_up_minutes`. So the run ends by the end time plus `wrap_up_m
 `wrap_up_minutes = 0`: work sessions are stopped at the end time, without a wrap-up). A stopped session is
 `interrupted` with the cause `end_time` (not an error, not "no progress") and the item's next session, in a later
 run, resumes it in its own context. `--until-strict` / `--no-until-strict` without `--until` is refused (exit 2).
+
+**Wrap up on demand:** to end a run started without an end time, without killing the command a session is running,
+run `python -m radark [--config FILE] wrap-up [--within MIN]` while the run runs (or create `<run_dir>/WRAP_UP` by
+hand: a request without a limit). The command writes `WRAP_UP` (`{"requested": <UTC time>, "within_minutes": MIN |
+null}`) and prints `Wrap-up requested at 14:05: running sessions finish their current tool call, save their work and
+stop; no new step starts.`; without a live dispatcher of that configuration it writes nothing and exits 1 (`No run
+is running for this configuration; nothing to wrap up.`); `--within` must be above 0 (else exit 2); a request
+already pending is kept (`A wrap-up was already requested at 14:05.`; to change `--within`, remove the file first).
+Once the dispatcher sees the file (between steps, during every wait, and about once a second while sessions run):
+no new step starts, a wait (poll, `PAUSE`, usage wait, back-off) ends, and every running work session gets the
+wrap-up text right **after the tool call it is in** has returned (a `PostToolUse` hook adds it to the session's
+context; a session that ends its turn first gets it from the `Stop` hook instead of the "continue" nudge). The text
+asks it to start no new work, wait for a command it started (also in the background) and use its result, commit
+what works, for apply check off finished tasks and write the open ones under `Left for a later run` in `tasks.md`,
+and not to report the handover done unless the phase is complete (see **Wrap-up**). The running command is never
+killed by the request itself. The run ends after the last session (exit 0; a goal run ends `stopped`) and removes
+`WRAP_UP`; `STOP` at the same time wins. A `WRAP_UP` file found when a run starts is left from an earlier run: it is
+removed (`Removed a WRAP_UP file left from an earlier run.`) and the run goes on. `status` shows a pending request
+(`Wrap-up requested at 14:05 (within 30 min): the running sessions are wrapping up; the run ends after them.`), and
+the cockpit's Now card `wrap-up pending since 14:05`.
 By default the run keeps the computer awake until it really ends, including that session (see **Keep awake**). Waits without a session (idle poll, `PAUSE`, usage wait,
 back-off) end at the moment. The start line says `Run ends at 07:00 tomorrow (2026-10-30), in 8 h 50 min (running
 sessions finish first)`, or with a strict end time `Run ends at 12:00 today, in 118 min (strict: running sessions
@@ -786,6 +807,22 @@ escalation.
   end-time wrap-up · HO-…`; log `end_time_stop` and `end_time_wrap_up`; no `time_limits` entry (an end time says
   nothing about the task's size).
 
+  A wrap-up on demand (`wrap-up`, see **Pause / stop**) asks the session in its own context, between two tool calls,
+  with the same words as the end-time wrap-up (`The owner asked this run to wrap up now (handover …, phase …)`), so
+  nothing is cut. Its limits: the inactivity limit and the maximum duration keep applying; after the request no
+  limit check runs and no extension is given; a session that got the text is stopped `wrap_up_minutes` after the
+  delivery (at once with 0); with `--within MIN` a work session the text has not reached MIN minutes after the
+  request (a tool call still running), or one that reaches its maximum duration first, is stopped and resumed with
+  the end-time-like prompt for at most `wrap_up_minutes` (`app · apply · owner wrap-up · HO-…`; only stopped with
+  0); other sessions (triage consultation, goal check, idle ask) get no text and are stopped only at `--within`;
+  wrap-up sessions are left alone. Its outcome is kept when it ended normally with its phase complete, or in a usage
+  limit or an owner wait; otherwise the step is `interrupted` with the cause `owner_wrap_up` (`→ interrupted, owner
+  wrap-up`; not an error, not "no progress"; a question from it is not triaged) and the item's next session, in a
+  later run, resumes it in its own context. Console: `Wrap-up requested (14:05): no new step starts; asking 2
+  running sessions to wrap up after the current tool call: app HO-…, backend HO-…`, `app HO-…: wrap-up request
+  delivered after Bash; wrapping up within 15 min`, `Wrap-up done: 2 sessions ended (app HO-… interrupted, backend
+  HO-… finished); exiting.`
+
   The run log has `wrap_up_start` and `wrap_up`; the item's state keeps `time_limits`, one entry per wrap-up and per
   work session cut by `max_time` or `idle_timeout`. When the product team reviews that handover, its review prompt
   gets a paragraph that lists them (e.g. `wrapped up after 6 h with 3 extensions (finished)`), says the task may be
@@ -893,19 +930,21 @@ Environment variables given to sessions and hooks (`HARNESS_RUN_DIR`, `HARNESS_P
 `state.json` (per handover: team, change, phase, sessions (with the progress snapshot `base`: branch heads, change,
 checked tasks), no_progress, triage_count, flags, reason, `waiting_for` (while held: the handovers the item waits
 for, each with handover, team, state), `resume_after_timeout` (session, team, phase, reason
-`idle_timeout | max_time | sleep | owner | dispatcher_stopped`, duration_s, limit_reason after a `hung` limit check), `time_limits` (sessions wrapped up or cut by a time limit:
+`idle_timeout | max_time | sleep | owner | dispatcher_stopped | end_time | owner_wrap_up`, duration_s, limit_reason after a `hung` limit check), `time_limits` (sessions wrapped up or cut by a time limit:
 session, phase, kind `wrap_up | cut`, reason, extensions, elapsed_s, outcome; named in the item's review prompt),
 escalation link: escalation handover, team, session, phase, reason, question, sent, answered),
 `meta` (`usage` per window: utilization 0–1, resets_at Unix s, status, seen; `usage_wait` of the current wait:
 until, window, utilization, cause; `backoff_until`, `backoff_minutes`; `running`: the session now running; `unconfigured`: per handover waiting for a
 team that is not set up and already escalated: team, sender, item, escalation, at), `runs.jsonl` (the run log), `sessions/<run-id>.jsonl` (full stream per session), `markers/<run-id>.jsonl`
-(hook markers), `tmp/<team>/` (session temp directories; never cleaned by the dispatcher), `session-settings.json`, `hook-config.json`, `lock`, `PAUSE`, `STOP`, `console.log` (copy of the console of every `run` / `once`), `goal.json` (the current or
+(hook markers), `tmp/<team>/` (session temp directories; never cleaned by the dispatcher), `session-settings.json`, `hook-config.json`, `lock`, `PAUSE`, `STOP`, `WRAP_UP` and `wrap-up-request.json` (a
+wrap-up on demand and the texts the hooks deliver, removed at its end), `console.log` (copy of the console of every `run` / `once`), `goal.json` (the current or
 last goal run, for observability and `note`: path, hash, started, status, sessions and limits, slept_s, empty_continues,
 guidance_pending, given_text — the goal text the product team last received —, last_verdict, last_verdict_at, result, ended — local end time), `goal-report-<YYYYMMDD-HHMMSS>.md`.
 
 Run-log events (one JSON line each, with `time`): `dispatcher_start`, `session_start` (team, repo, handover,
 phase, prompt, resume), `session_end` (outcome, exit_code, session, duration_s, auto_answers, denials,
-escalations, timed_out, timeout_reason `idle_timeout | max_time`, interrupt_cause `sleep | owner | wrap_up`, progress_sources `hub | commits | tasks`, stream,
+escalations, timed_out, timeout_reason `idle_timeout | max_time`, interrupt_cause `sleep | owner | wrap_up | end_time |
+owner_wrap_up`, progress_sources `hub | commits | tasks`, stream,
 result tail), `resume_after_timeout` (session, reason, duration_s), `wrap_up_start` (team, handover, phase,
 session, elapsed_s, extensions_used, grace_min), `wrap_up` (the same and wrap_up_session, outcome, timeout_reason,
 duration_s), `suspend` (start, end in Unix s, seconds, during: team,
@@ -930,6 +969,11 @@ max_sessions, max_hours), `goal_guidance_carried` (path, recovered `stored | has
 `run_until` (until, strict), `run_until_reached` (until), `end_time_passed` (until, sessions_running),
 `end_time_stop` (team, handover, phase, session, elapsed_s, until, grace_min), `end_time_wrap_up` (team, handover,
 phase, session, elapsed_s, until, grace_min, wrap_up_session, outcome, interrupt_cause, duration_s),
+`owner_wrap_up_requested` (requested, within_min, sessions: team, handover, phase, session), `owner_wrap_up_delivered`
+(team, handover, session, source `tool | stop`, tool_name, after_s), `owner_wrap_up_stop` (team, handover, phase,
+session, reason `grace | within | max_time`), `owner_wrap_up_resume` (team, handover, phase, session, reason,
+grace_min, wrap_up_session, outcome, interrupt_cause, duration_s), `owner_wrap_up_done` (sessions: team, handover,
+outcome, cause; duration_s), `owner_wrap_up_stale`,
 `pause`, `stop`, `clear`, `hooks_not_loaded`.
 
 ## Hub contract used (read from `ho.py`, task 1.1)

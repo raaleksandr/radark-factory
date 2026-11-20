@@ -353,7 +353,10 @@ Where to watch:
 - `radark status` (pipelines and limits on this computer), `radark escalations` (escalated and stalled items).
 
 To pause, create `.radark/PAUSE` (the running session finishes, no new one starts until you delete the file); to
-stop, create `.radark/STOP` (the run exits between sessions). See "Pause / stop" under "Commands".
+stop, create `.radark/STOP` (the run exits between sessions). To end a run soon without losing the running work,
+run `radark wrap-up` (add `--within 30` to stop sessions not reached within 30 minutes): every running session
+finishes the tool call it is in, saves its work and stops, and the run ends after them; a later run resumes the
+unfinished items. See "Pause / stop" under "Commands".
 
 **Answering an escalation.** When a session needs you (an escalation keyword such as push or payment, a
 `BLOCKED: owner` line, a stalled item), the team sends a handover to the `owner` team, tagged `escalation`:

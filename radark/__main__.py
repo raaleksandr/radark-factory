@@ -1,5 +1,5 @@
 """CLI and loop: python -m radark [--config FILE]
-run|once|dry-run|plan|status|test-slot|escalations|clear|keep|note|cockpit|example-config.
+run|once|dry-run|plan|status|test-slot|escalations|clear|keep|note|wrap-up|cockpit|example-config.
 
 Without --config the configuration file is radark.toml in the current directory, or the legacy harness.toml
 (radark-config-names D1)."""
@@ -31,7 +31,8 @@ from . import workflow
 from .awake import FORMS as KEEP_AWAKE_FORMS, KeepAwake, Keeper, cover_end_time, parse_keep_awake, wanted
 from .clock import Sleep, SleepWatch, awake, parse_until
 from .hub import Hub, HoError, check_ho, hub_lock_message
-from .runner import END_TIME, STOP, WRAP_UP, Runner, SessionResult, kill_pid_tree
+from .runner import (END_TIME, OWNER_HARD, OWNER_STOP, OWNER_WRAP_UP, STOP, WRAP_UP, Runner, SessionResult,
+                     kill_pid_tree, read_markers)
 from .state import GoalRun, RunLog, State, now_ts, read_goal, write_json_atomic
 from .workflow import branch_heads, commits_outside, git_out, new_commits  # noqa: F401 (moved; kept importable)
 
@@ -42,6 +43,8 @@ IDLE_REGULAR_LIMIT = 3  # did_regular verdicts in a row before the idle ask wait
 GOAL_STALL_LIMIT = 2  # consecutive goal checks without new hub activity end the run (design G4)
 USAGE_MARGIN_S = 60  # after a window's reported reset: covers clock skew against the server (design D3)
 USAGE_REMINDER_S = 3600  # one console reminder per hour during a long usage wait (design D6)
+WRAP_UP_FILE = "WRAP_UP"  # the owner's wrap-up on demand, next to PAUSE / STOP (owner-wrap-up-on-demand D1)
+WRAP_UP_REQUEST = "wrap-up-request.json"  # the texts for the hooks, per session run ID (D3)
 
 
 class HooksNotLoaded(Exception):
@@ -205,6 +208,12 @@ class Dispatcher:
         self._idle_retry = False  # an interrupted idle ask runs again when the loop is idle (sleep-aware D6)
         self.machine: machine_mod.Machine | None = None  # the machine layer; set by main (machine-wide-instances)
         self._machine_wait: tuple[int, int, int] | None = None  # (own, other, limit) of the machine wait printed
+        # wrap-up on demand (owner-wrap-up-on-demand D2-D8): the request once seen, the running sessions by worker,
+        # the work sessions asked (by session run ID) and the last asked step's end per handover
+        self._wrap_req: dict | None = None
+        self._live: dict[int, dict] = {}
+        self._wrap_asked: dict[str, dict] = {}
+        self._wrap_ended: dict[str, dict] = {}
 
     # ---- per-worker context (parallel-sessions D1)
 
@@ -377,6 +386,8 @@ class Dispatcher:
     def finish(self, cand: sel.Candidate, rec: dict, result: SessionResult, since: str | None = None) -> SessionResult:
         """Triage any question, then update the record (shared by new work and owner-answer resumes)."""
         since = since or result.started  # progress counts from the first session, also across triage resumes
+        if result.outcome == "question" and self._wrap_req is not None:  # no triage after a wrap-up request (D6)
+            self.owner_interrupted(rec, result)
         while result.outcome == "question" and self.cfg.triage:
             resumed = self.triage(cand, result, since)
             if resumed is None:
@@ -440,6 +451,8 @@ class Dispatcher:
         ctx = self.ctx()
         self._sessions[id(ctx)] = ctx.info = {"team": team, "handover": handover, "phase": phase,
                                               **({"title": title} if title else {})}
+        live = self._live[id(ctx)] = {"team": team, "handover": handover, "phase": phase, "title": title,
+                                      "work": work and not wrap_up, "run_id": None}
         running = len(self._sessions) if self.cfg.parallel_sessions > 1 else 1
         for line in start_lines(team, phase, handover, title, step, running):
             self.out(line)
@@ -452,6 +465,7 @@ class Dispatcher:
                 runs = self.running_records()
                 runs.pop(ctx.running_id, None)  # a resume in the same worker replaces its record
                 ctx.running_id = session_id
+                live["run_id"] = run_id
                 runs[session_id] = {"session": session_id, "run_id": run_id, "team": team, "handover": handover,
                                     "phase": phase, "step": step, "pid": pid, "started": now_ts()}
                 self.state.save()
@@ -467,6 +481,12 @@ class Dispatcher:
         on_deadline, on_abort = (self.limit_watch(team, handover, title, since, base) if work and not wrap_up
                                  else (None, None))
         end_at, on_end_at = self.end_watch(work and not wrap_up)
+
+        def on_tick(r: SessionResult) -> str | None:  # wrap-up on demand (D5); wrap-up sessions are left alone
+            if wrap_up or self.owner_wrap_up() is None:
+                return None
+            with self.lock:
+                return self.owner_tick(live, r)
         here = threading.current_thread() is threading.main_thread() and not self._parallel
         old = signal.signal(signal.SIGINT, self._on_interrupt) if here else None
         try:
@@ -475,12 +495,13 @@ class Dispatcher:
                                json_schema=json_schema, timeout_s=self.cfg.wrap_up_minutes * 60 if wrap_up else None,
                                on_usage=self.usage_watch(team, handover), on_start=on_start,
                                sleep_check=sleep_check, on_deadline=on_deadline, on_deadline_abort=on_abort,
-                               end_at=end_at, on_end_at=on_end_at)
+                               end_at=end_at, on_end_at=on_end_at, on_tick=on_tick)
         finally:
             if here:
                 signal.signal(signal.SIGINT, old)
                 self._interrupts = 0
             self._sessions.pop(id(ctx), None)
+            self._live.pop(id(ctx), None)
             ctx.info = None
             self._idle_mark = self.awake_now()  # quiet awake time for the idle re-ask counts from here (D4)
         if not getattr(r, "isolated", True) and not self._job_warned:  # parallel-sessions D5: logged once
@@ -514,6 +535,16 @@ class Dispatcher:
             if self.phase_complete(cand, rec, r, since or r.started):
                 r.outcome = "finished"
                 r.unescalated_denials = len(r.denials)
+        if r.run_id in self._wrap_asked:  # a session that ended before the next tick saw the delivery
+            self.owner_delivered(self._wrap_asked[r.run_id], r.markers)
+        owner = (work and not wrap_up and self._wrap_req is not None and r.interrupt_cause not in (END_TIME, WRAP_UP)
+                 and (r.run_id in self._wrap_asked or r.interrupt_cause == OWNER_WRAP_UP))
+        owner_resume = owner and r.owner_hard and self.cfg.wrap_up_minutes > 0
+        if owner and not owner_resume:  # the outcome rule of a wrap-up on demand (D6)
+            cand = sel.Candidate(kind="work", team=team, handover=handover, title=title or "", phase=phase,
+                                 recency="", team_index=0, change=rec.get("change"))
+            if not self.owner_keeps(cand, rec, r, since or r.started):
+                r.outcome, r.interrupt_cause = "interrupted", OWNER_WRAP_UP
         stopped = work and r.interrupt_cause == WRAP_UP
         if stopped:  # wrap-up W4 step 1
             grace, n = self.cfg.wrap_up_minutes, r.extensions_used
@@ -530,7 +561,7 @@ class Dispatcher:
             at = day_clock(self.until, time.time())
             self.problem(f"{what}: end time {at} reached; asking the session to wrap up within {grace:g} min"
                          if end_wrap else f"{what}: end time {at} reached; the session is stopped")
-        stopped = stopped or end_wrap
+        stopped = stopped or end_wrap or owner_resume
         if self._cleanup_pending and not stopped:  # a wrapped-up session counts once its wrap-up ends (D2, D7)
             self.ended_goal_given(team, r)
         self.log.write("session_end", team=team, handover=handover, phase=phase, session=r.session_id,
@@ -570,6 +601,11 @@ class Dispatcher:
             self.state.save()
         if work and not wrap_up and r.timeout_reason in TIME_LIMIT:  # wrap-up W6.2: a cut work session
             self.time_limit_entry(rec, r, phase, "cut", r.timeout_reason, r.outcome)
+        if work and self._wrap_req is not None and not owner_resume:  # for the run's last line (D8)
+            self._wrap_ended[handover] = {"team": team, "handover": handover, "outcome": r.outcome,
+                                          "cause": r.interrupt_cause}
+        if owner_resume:
+            return self.owner_hard_wrap_up(team, phase, handover, r, since, title)
         if end_wrap:
             return self.end_time_wrap_up(team, phase, handover, r, since, title)
         if stopped:
@@ -615,22 +651,235 @@ class Dispatcher:
         lock = self.cfg.team(team).repo / ".git" / "index.lock"
         message = prompts.end_time_wrap_up_message(cand, day_clock(self.until, time.time()), self.cfg.wrap_up_minutes,
                                                    lock.is_file(), self.goal_for(team), self.profile(team))
-        start = since or r.started
-        w = self.session(team, message, phase, handover, resume=r.session_id, since=start, title=title,
-                         step="end-time wrap-up", wrap_up=True)
-        keep = w.outcome in ("usage_limit", "waiting_for_owner") or (
-            normal_end(w) and w.outcome != "error" and self.phase_complete(cand, rec, w, start))
-        if not keep:
-            w.outcome, w.interrupt_cause = "interrupted", END_TIME
-            for s in (self.state.get(handover) or rec).get("sessions", []):
-                if s.get("id") == w.session_id and s.get("started") == w.started:
-                    s["outcome"] = w.outcome
-            self.state.save()
+        w = self.resume_wrap_up(cand, rec, r, since, message, "end-time wrap-up", END_TIME, title)
         self.log.write("end_time_wrap_up", team=team, handover=handover, phase=phase, session=r.session_id,
                        elapsed_s=r.duration_s, until=local_iso(self.until), grace_min=self.cfg.wrap_up_minutes,
                        wrap_up_session=w.session_id, outcome=w.outcome, interrupt_cause=w.interrupt_cause,
                        duration_s=w.duration_s)
         return w
+
+    def resume_wrap_up(self, cand: sel.Candidate, rec: dict, r: SessionResult, since: str | None, message: str,
+                       step: str, cause: str, title: str | None) -> SessionResult:
+        """Resume a stopped work session with a wrap-up `message`, shared by the end-time wrap-up and the hard wrap-up
+        on demand (strict-end-time D4, owner-wrap-up-on-demand D5): the result is `interrupted` / `cause` unless the
+        wrap-up ended normally with the phase complete, or ended in a usage limit or an owner wait."""
+        start = since or r.started
+        w = self.session(cand.team, message, cand.phase, cand.handover, resume=r.session_id, since=start,
+                         title=title, step=step, wrap_up=True)
+        keep = w.outcome in ("usage_limit", "waiting_for_owner") or (
+            normal_end(w) and w.outcome != "error" and self.phase_complete(cand, rec, w, start))
+        if not keep:
+            w.outcome, w.interrupt_cause = "interrupted", cause
+            self.mark_outcome(self.state.get(cand.handover) or rec, w)
+        return w
+
+    def mark_outcome(self, rec: dict, r: SessionResult) -> None:
+        """Write a changed outcome into the item's session record."""
+        for s in rec.get("sessions", []):
+            if s.get("id") == r.session_id and s.get("started") == r.started:
+                s["outcome"] = r.outcome
+        self.state.save()
+
+    # ---- wrap-up on demand (owner-wrap-up-on-demand)
+
+    def wrap_up_path(self) -> Path:
+        return self.cfg.run_dir / WRAP_UP_FILE
+
+    def clear_stale_wrap_up(self) -> None:
+        """A `WRAP_UP` file found when a run starts is left from an earlier run: removed, not acted on (D1)."""
+        (self.cfg.run_dir / WRAP_UP_REQUEST).unlink(missing_ok=True)
+        path = self.wrap_up_path()
+        if path.exists():
+            path.unlink(missing_ok=True)
+            self.log.write("owner_wrap_up_stale")
+            self.out("Removed a WRAP_UP file left from an earlier run.")
+
+    def drop_wrap_up_files(self) -> None:
+        for name in (WRAP_UP_FILE, WRAP_UP_REQUEST):
+            try:
+                (self.cfg.run_dir / name).unlink(missing_ok=True)
+            except OSError as exc:
+                self.problem(f"could not remove {name}: {exc}")
+
+    def owner_wrap_up(self) -> dict | None:
+        """The wrap-up on demand, or None (D2): one `stat` until the request is seen, then the request; the first
+        time it is seen the dispatcher acts on it (D3)."""
+        if self._wrap_req is not None:
+            return self._wrap_req
+        if not self.wrap_up_path().exists():
+            return None
+        with self.lock:
+            if self._wrap_req is None:
+                req = read_wrap_up(self.wrap_up_path())
+                if req is not None:
+                    self.act_on_wrap_up(req)
+        return self._wrap_req
+
+    def act_on_wrap_up(self, req: dict) -> None:
+        """Once per run: no new step from now on; every running work session is listed for the hooks (D3)."""
+        req["seen"] = time.time()
+        self._wrap_req = req
+        asked = [i for i in self._live.values() if i["work"]]
+        for info in asked:
+            if info["run_id"]:
+                self.enlist(info, write=False)
+        self.write_wrap_request()
+        within = req.get("within")
+        self.log.write("owner_wrap_up_requested", requested=local_iso(req["requested"]), within_min=within,
+                       sessions=[{"team": i["team"], "handover": i["handover"], "phase": i["phase"],
+                                  "session": (self._wrap_asked.get(i["run_id"]) or {}).get("session")}
+                                 for i in asked])
+        head = f"{stamp()}  Wrap-up requested ({hhmm(req['requested'])}"
+        head += f", within {within:g} min): " if within else "): "
+        if asked:
+            n = len(asked)
+            self.out(head + f"no new step starts; asking {n} running session{'' if n == 1 else 's'} to wrap up "
+                     "after the current tool call: " + ", ".join(f"{i['team']} {i['handover']}" for i in asked))
+        else:
+            self.out(head + "no new step starts; nothing is running; the run ends.")
+
+    def enlist(self, info: dict, write: bool = True) -> dict:
+        """List a running work session for the hooks with its wrap-up text (D3); also one that started its process
+        after the request was seen."""
+        run_id = info["run_id"]
+        if run_id not in self._wrap_asked:
+            runs = self.running_records()
+            session = next((s for s, v in runs.items() if v.get("run_id") == run_id), run_id)
+            self._wrap_asked[run_id] = {"team": info["team"], "handover": info["handover"], "phase": info["phase"],
+                                        "session": session, "delivered": None, "stop": None,
+                                        "text": self.owner_text(info)}
+            if write:
+                self.write_wrap_request()
+        return self._wrap_asked[run_id]
+
+    def owner_candidate(self, info: dict) -> sel.Candidate:
+        rec = self.state.get(info["handover"]) or {}
+        return sel.Candidate(kind="work", team=info["team"], handover=info["handover"],
+                             title=info.get("title") or rec.get("title") or "", phase=info["phase"], recency="",
+                             team_index=0, change=rec.get("change"))
+
+    def owner_text(self, info: dict, hard: str | None = None) -> str:
+        lock = self.cfg.team(info["team"]).repo / ".git" / "index.lock"
+        return prompts.owner_wrap_up_message(self.owner_candidate(info), self.cfg.wrap_up_minutes,
+                                             self.goal_for(info["team"]), self.profile(info["team"]), hard=hard,
+                                             index_lock=bool(hard) and lock.is_file())
+
+    def write_wrap_request(self) -> None:
+        data = {"run": os.getpid(), "requested": local_iso(self._wrap_req["requested"]),
+                "sessions": {rid: a["text"] for rid, a in self._wrap_asked.items()}}
+        path = self.cfg.run_dir / WRAP_UP_REQUEST
+        for attempt in range(5):  # a hook reading the file may hold it open for a moment (Windows)
+            try:
+                write_json_atomic(path, data)
+                return
+            except OSError as exc:
+                if attempt == 4:
+                    self.problem(f"could not write {WRAP_UP_REQUEST}: {exc}")
+                time.sleep(0.1)
+
+    def owner_tick(self, live: dict, r: SessionResult) -> str | None:
+        """The per-session watch after the request (D5): delivery from the hooks' marker, the grace after it, the
+        `--within` limit; a session that is not a work session is only stopped at that limit."""
+        req, now = self._wrap_req, time.time()
+        within = req.get("within")
+        reached = within is not None and now >= req["requested"] + within * 60
+        if not live["work"]:
+            if reached:
+                self.log.write("owner_wrap_up_stop", team=live["team"], handover=live["handover"],
+                               phase=live["phase"], session=r.session_id, reason="within")
+                self.problem(f"{live['team']} {STEP_KIND.get(live['phase'], live['phase'])}: wrap-up limit "
+                             f"{within:g} min reached; the session is stopped")
+                return OWNER_STOP
+            return None
+        live["run_id"] = live["run_id"] or r.run_id
+        a = self.enlist(live)
+        if a["delivered"] is None:
+            try:
+                markers = read_markers(self.cfg.run_dir, r.run_id)
+            except (OSError, ValueError):  # a marker line being written: read again at the next tick
+                markers = []
+            self.owner_delivered(a, markers)
+        if a["delivered"] is not None:
+            if now >= a["delivered"] + self.cfg.wrap_up_minutes * 60:
+                return self.owner_stop(a, "grace", OWNER_STOP)
+            return None
+        if reached:
+            return self.owner_stop(a, "within", OWNER_HARD)
+        return None
+
+    def owner_delivered(self, a: dict, markers: list[dict]) -> None:
+        """Note the delivery once the hooks' marker shows it (D5): event and console line."""
+        marker = next((m for m in markers if m.get("event") == "owner_wrap_up"), None)
+        if marker is None or a["delivered"] is not None:
+            return
+        now = time.time()
+        a["delivered"] = now
+        tool = marker.get("tool_name") if marker.get("source") == "tool" else None
+        self.log.write("owner_wrap_up_delivered", team=a["team"], handover=a["handover"], session=a["session"],
+                       source=marker.get("source"), tool_name=tool, after_s=round(now - self._wrap_req["requested"]))
+        self.out(f"{stamp()}  {a['team']} {a['handover']}: wrap-up request delivered "
+                 + (f"after {tool or 'a tool call'}" if marker.get("source") == "tool" else "at the end of its turn")
+                 + f"; wrapping up within {self.cfg.wrap_up_minutes:g} min")
+
+    def owner_stop(self, a: dict, reason: str, answer: str) -> str:
+        a["stop"] = reason
+        self.log.write("owner_wrap_up_stop", team=a["team"], handover=a["handover"], phase=a["phase"],
+                       session=a["session"], reason=reason)
+        what, grace = f"{a['team']} {a['handover']}", self.cfg.wrap_up_minutes
+        if answer == OWNER_STOP:
+            self.problem(f"{what}: wrap-up time ({grace:g} min) is over; the session is stopped")
+        else:
+            why = "its time limit was reached" if reason == "max_time" else "the wrap-up limit was reached"
+            self.problem(f"{what}: {why} before the request reached it; the session is stopped"
+                         + (f" and resumed to wrap up within {grace:g} min" if grace > 0 else ""))
+        return answer
+
+    def owner_deadline(self, live: dict | None, r: SessionResult) -> str:
+        """A work session's maximum duration after the request: no limit check, no extension (D5)."""
+        info = dict(live or {"team": r.team, "handover": r.handover, "phase": r.phase, "title": None})
+        info["run_id"] = r.run_id
+        a = self.enlist(info)
+        return self.owner_stop(a, "max_time", OWNER_STOP if a["delivered"] is not None else OWNER_HARD)
+
+    def owner_keeps(self, cand: sel.Candidate, rec: dict, r: SessionResult, since: str) -> bool:
+        """A session asked to wrap up keeps a completed phase, a usage limit or an owner wait (D6)."""
+        return r.outcome in ("usage_limit", "waiting_for_owner") or (
+            normal_end(r) and r.outcome != "error" and self.phase_complete(cand, rec, r, since))
+
+    def owner_interrupted(self, rec: dict, r: SessionResult) -> None:
+        r.outcome, r.interrupt_cause = "interrupted", OWNER_WRAP_UP
+        self.mark_outcome(rec, r)
+        if r.handover in self._wrap_ended:
+            self._wrap_ended[r.handover].update(outcome=r.outcome, cause=r.interrupt_cause)
+
+    def owner_hard_wrap_up(self, team: str, phase: str, handover: str, r: SessionResult, since: str | None,
+                           title: str | None) -> SessionResult:
+        """Resume a work session stopped before the request reached it with the hard wrap-up prompt, limited to
+        `wrap_up_minutes` (D5); its result is the step's result."""
+        a = self._wrap_asked.get(r.run_id) or {}
+        info = {"team": team, "handover": handover, "phase": phase, "title": title}
+        rec = self.state.get(handover) or {}
+        cand = self.owner_candidate(info)
+        w = self.resume_wrap_up(cand, rec, r, since, self.owner_text(info, hard=a.get("stop") or "within"),
+                                "owner wrap-up", OWNER_WRAP_UP, title)
+        self._wrap_ended[handover] = {"team": team, "handover": handover, "outcome": w.outcome,
+                                      "cause": w.interrupt_cause}
+        self.log.write("owner_wrap_up_resume", team=team, handover=handover, phase=phase, session=r.session_id,
+                       reason=a.get("stop"), grace_min=self.cfg.wrap_up_minutes, wrap_up_session=w.session_id,
+                       outcome=w.outcome, interrupt_cause=w.interrupt_cause, duration_s=w.duration_s)
+        return w
+
+    def owner_wrap_up_end(self) -> int:
+        """The run's end after a wrap-up on demand (D8)."""
+        ended = list(self._wrap_ended.values())
+        self.log.write("owner_wrap_up_done", sessions=ended,
+                       duration_s=round(time.time() - self._wrap_req["seen"]))
+        n = len(ended)
+        parts = ", ".join(f"{e['team']} {e['handover']} {e['outcome']}" for e in ended)
+        self.out(f"{stamp()}  Wrap-up done: {n} session{'' if n == 1 else 's'} ended"
+                 + (f" ({parts})" if parts else "") + "; exiting.")
+        self.drop_wrap_up_files()
+        return self.end_goal("stopped", "wrap-up requested") if self.goal else 0
 
     def wrap_up(self, team: str, phase: str, handover: str, r: SessionResult, since: str | None,
                 title: str | None) -> SessionResult:
@@ -1119,9 +1368,7 @@ class Dispatcher:
         check_team = self.product_team()
         checks = self.cfg.limit_checks if check_team is not None else 0
         wrap = self.cfg.wrap_up_minutes > 0
-        if checks <= 0 and not wrap:
-            return None, None
-        used, aborted = [0], threading.Event()
+        used, aborted = [0], threading.Event()  # always callbacks: a wrap-up on demand answers at the deadline (D5)
         ctx = self.ctx()
 
         def on_deadline(r: SessionResult, elapsed: float) -> float | str | None:
@@ -1131,6 +1378,8 @@ class Dispatcher:
 
         def deadline(r: SessionResult, elapsed: float) -> float | str | None:
             r.extensions_used = used[0]
+            if self._wrap_req is not None:  # no limit check, no extension after a wrap-up request (owner D5)
+                return self.owner_deadline(self._live.get(id(ctx)), r)
             if self.until_strict and self.until is not None and time.time() >= self.until:
                 return WRAP_UP if wrap else None  # no limit check, no extension after a strict end time (D5)
             if used[0] >= checks:  # no extension left: wrap up, or end at the deadline without a check
@@ -1139,6 +1388,8 @@ class Dispatcher:
             progress = self.made_progress(team, handover, since or r.started,
                                           base if since is None else base_of(rec, since) if rec else None)
             verdict = self.limit_check(check_team, r, elapsed, progress, used[0], title, aborted)
+            if self._wrap_req is not None:  # requested while the check ran: its answer is ignored (owner D5)
+                return self.owner_deadline(self._live.get(id(ctx)), r)
             if verdict is None:
                 return None
             if verdict["verdict"] == "progressing":
@@ -1854,7 +2105,11 @@ class Dispatcher:
         """A wait without a session that never runs past the end time (design D4)."""
         if self.until is not None:
             seconds = max(0.0, min(seconds, self.until - time.time()))
-        time.sleep(seconds)
+        end = time.time() + seconds
+        while (left := end - time.time()) > 0:  # a wrap-up request ends the wait (owner-wrap-up-on-demand D2)
+            time.sleep(min(left, 1.0))
+            if self._wrap_req is None and self.owner_wrap_up() is not None:
+                return
 
     def wait_for_reset(self, window: str, w: dict, cause: str) -> None:
         """Start (or keep) a wait until `window` resets; logged once per wait, printed once per process."""
@@ -2013,8 +2268,11 @@ class Dispatcher:
         """Wait without the lock until a worker ends or `timeout` passes; never past the end time."""
         if self.until is not None:
             timeout = max(0.0, min(timeout, self.until - time.time()))
+        end = time.time() + timeout
         with self.lock.released():
-            self._wake.wait(timeout)
+            while (left := end - time.time()) > 0 and not self._wake.wait(min(left, 1.0)):
+                if self._wrap_req is None and self.wrap_up_path().exists():  # a new wrap-up request (D2)
+                    return
 
     def drain(self) -> None:
         """Wait for every running worker (no new starts)."""
@@ -2029,6 +2287,8 @@ class Dispatcher:
         sessions); None to go on."""
         if (self.cfg.run_dir / "STOP").exists():
             return "STOP file found"
+        if self.owner_wrap_up() is not None:
+            return "wrap-up requested"
         if self.goal and (limit := self.goal_limit()):
             return limit
         if self.until is not None and time.time() >= self.until:
@@ -2054,7 +2314,10 @@ class Dispatcher:
         if (self.cfg.run_dir / "STOP").exists():
             self.log.write("stop")
             self.out("STOP file found; exiting.")
+            self.drop_wrap_up_files()  # STOP wins over a wrap-up request (owner-wrap-up-on-demand D8)
             return self.end_goal("stopped", "STOP file found") if self.goal else 0
+        if self._wrap_req is not None:
+            return self.owner_wrap_up_end()
         if self.goal and (limit := self.goal_limit()):
             return self.end_goal("limit", limit)
         if (code := self.until_end()) is not None:
@@ -2174,7 +2437,10 @@ class Dispatcher:
             if (self.cfg.run_dir / "STOP").exists():
                 self.log.write("stop")
                 self.out("STOP file found; exiting.")
+                self.drop_wrap_up_files()  # STOP wins over a wrap-up request (owner-wrap-up-on-demand D8)
                 return self.end_goal("stopped", "STOP file found") if self.goal else 0
+            if self.owner_wrap_up() is not None:  # before each start (D2)
+                return self.owner_wrap_up_end()
             if self.goal and (limit := self.goal_limit()):
                 return self.end_goal("limit", limit)
             if (code := self.until_end()) is not None:  # wall clock: also passed while the computer slept
@@ -2278,7 +2544,7 @@ STEP_KIND = {"goal": "goal check", "idle": "idle ask", "consult": "triage consul
              "limit_check": "limit check"}
 TIME_LIMIT = {"idle_timeout": "idle time limit", "max_time": "time limit"}
 INTERRUPT_CAUSE = {"sleep": "computer slept", "owner": "owner", "dispatcher_stopped": "dispatcher stopped",
-                   WRAP_UP: "asked to wrap up", END_TIME: "end time"}
+                   WRAP_UP: "asked to wrap up", END_TIME: "end time", OWNER_WRAP_UP: "owner wrap-up"}
 
 
 def utf8_console() -> bool:
@@ -2318,6 +2584,79 @@ def keep_awake_text(s: KeepAwake, now: float | None = None, until: float | None 
 
 def local_iso(ts: float | None) -> str | None:
     return None if ts is None else dt.datetime.fromtimestamp(ts).isoformat(timespec="minutes")
+
+
+def hhmm(ts: float) -> str:
+    return dt.datetime.fromtimestamp(ts).strftime("%H:%M")
+
+
+def read_wrap_up(path: Path) -> dict | None:
+    """A `WRAP_UP` request: {requested (epoch s), within (min) | None}; a file that is not the command's JSON is a
+    request at its modification time without a limit (owner-wrap-up-on-demand D1). None when it is gone."""
+    try:
+        mtime = path.stat().st_mtime
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    try:
+        data = json.loads(text)
+        requested = dt.datetime.fromisoformat(str(data["requested"]).replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return {"requested": mtime, "within": None}
+    within = data.get("within_minutes")
+    ok = isinstance(within, (int, float)) and not isinstance(within, bool) and within > 0
+    return {"requested": requested, "within": float(within) if ok else None}
+
+
+def running_dispatcher(run_dir: Path) -> int | None:
+    """The PID of a live dispatcher holding the run lock of this run directory, as `Lock.acquire` checks it."""
+    try:
+        pid = int((Path(run_dir) / "lock").read_text().strip() or 0)
+    except (OSError, ValueError):
+        return None
+    return pid if pid_alive(pid) else None
+
+
+def positive_minutes(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        value = 0.0
+    if not value > 0 or math.isinf(value):
+        raise argparse.ArgumentTypeError(f"must be a number of minutes above 0, not '{text}'")
+    return value
+
+
+def wrap_up_command(cfg: config_mod.Config, within: float | None) -> int:
+    """`wrap-up [--within MIN]`: ask the running dispatcher of this configuration to wrap up (D1)."""
+    if running_dispatcher(cfg.run_dir) is None:
+        print("No run is running for this configuration; nothing to wrap up.", file=sys.stderr)
+        return 1
+    path = cfg.run_dir / WRAP_UP_FILE
+    if path.exists():
+        req = read_wrap_up(path)
+        if req is not None:
+            print(f"A wrap-up was already requested at {hhmm(req['requested'])}.")
+            return 0
+    now = time.time()
+    write_json_atomic(path, {"requested": dt.datetime.fromtimestamp(now, dt.timezone.utc).isoformat(
+        timespec="seconds"), "within_minutes": within})
+    print(f"Wrap-up requested at {hhmm(now)}: running sessions finish their current tool call, save their work and "
+          "stop; no new step starts." + (f" Sessions not reached within {within:g} min are stopped and wrapped up."
+                                         if within else ""))
+    return 0
+
+
+def wrap_up_status(cfg: config_mod.Config) -> str | None:
+    """The `status` line of a pending wrap-up on demand (D9), or None."""
+    req = read_wrap_up(cfg.run_dir / WRAP_UP_FILE)
+    if req is None:
+        return None
+    if running_dispatcher(cfg.run_dir) is None:
+        return "A WRAP_UP file exists but no run is running; the next run removes it."
+    within = f" (within {req['within']:g} min)" if req["within"] else ""
+    return (f"Wrap-up requested at {hhmm(req['requested'])}{within}: the running sessions are wrapping up; the run "
+            "ends after them.")
 
 
 def day_clock(ts: float, now: float) -> str:
@@ -2816,6 +3155,8 @@ def status(config_arg: str | None) -> int:
                   f"({holder.get('config') or 'configuration unknown'})")
         if not conflicts:
             print(f"Repository conflicts of {cfg.path}: none")
+        if (line := wrap_up_status(cfg)) is not None:
+            print(line)
     return 2 if error else 0
 
 
@@ -3076,6 +3417,11 @@ def main(argv=None) -> int:
     k.add_argument("id")
     k.add_argument("--team", help="working team, if the handover has no record yet")
     k.add_argument("--off", action="store_true", help="go back to a fresh session per phase")
+    wu = sub.add_parser("wrap-up", help="ask the running run to wrap up: sessions finish their current tool call, "
+                                        "save their work and stop; no new step starts")
+    wu.add_argument("--within", type=positive_minutes, metavar="MIN",
+                    help="a session the request has not reached within MIN minutes is stopped and resumed to wrap "
+                         "up within [loop] wrap_up_minutes")
     n = sub.add_parser("note", help="append a timestamped note to the goal file of the running goal run")
     n.add_argument("text")
     ck = sub.add_parser("cockpit", help="local web page listing what is addressed to the owner in every pipeline on "
@@ -3146,6 +3492,8 @@ def main(argv=None) -> int:
         return 2
     if args.command == "note":
         return add_note(cfg, args.text)
+    if args.command == "wrap-up":  # owner-wrap-up-on-demand D1: no lock, no `ho`
+        return wrap_up_command(cfg, args.within)
     if args.command == "once" or (args.command == "run" and not args.dry_run):
         tee_console(cfg.run_dir, sys.argv[1:] if argv is None else argv)
         quick_edit_off()
@@ -3272,6 +3620,7 @@ def main(argv=None) -> int:
                 d.problem(f"the radark-test-slot wrapper could not be written in {cfg.run_dir / 'bin'}: {exc}")
             d.log.write("dispatcher_start", once=once, pid=os.getpid(), goal=str(goal.path) if goal else None)
             d.recover()  # after the lock: the dispatcher that wrote the record is gone
+            d.clear_stale_wrap_up()  # owner-wrap-up-on-demand D1
             if goal:
                 d.start_goal(goal)
             d.start_budget()
