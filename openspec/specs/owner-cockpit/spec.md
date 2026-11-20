@@ -377,6 +377,17 @@ A card SHALL list the sessions of its run log that have a `session_start` and no
 - **WHEN** a running session's handover is not in the hub's list
 - **THEN** its title is shown as "unknown"
 
+### Requirement: Now pending wrap-up
+A `running` card on the Now tab SHALL show `wrap-up pending since HH:MM` when the pipeline's run log has an `owner_wrap_up_requested` event after its last `dispatcher_start` and no `owner_wrap_up_done` after it; the Now API SHALL give that request time, or null.
+
+#### Scenario: Pending wrap-up shown
+- **WHEN** `alpha` is running and its run log has `owner_wrap_up_requested` at 14:05 after the last `dispatcher_start` and no `owner_wrap_up_done`
+- **THEN** `alpha`'s card shows `wrap-up pending since 14:05`
+
+#### Scenario: Wrap-up done
+- **WHEN** the run log has `owner_wrap_up_done` after that request
+- **THEN** the card shows no pending wrap-up
+
 ### Requirement: Now last event and last run
 Every card SHALL show the time and kind of the newest run-log record. A card that is not running SHALL also show, when known, the end time and outcome of the last session, the time of the last `dispatcher_start` and the time of a stop record written after it; an end without a stop record SHALL be shown as not recorded.
 
