@@ -29,11 +29,11 @@ Handover: HO-20261121-gcrx. radark-handover part: HO-20261121-g3zr (sent in the 
 - [x] 3.1 Bump `version` in `pyproject.toml` from `0.7.0` to `0.8.0` (design D4) and verify
   `python -m radark --version` prints `radark 0.8.0` from the working tree; commit as `Release 0.8.0`. No tag, push
   or install.
-- [ ] 3.2 Run the full suite `radark-test-slot python -m pytest radark/tests`; all must pass. Record the test count;
+- [x] 3.2 Run the full suite `radark-test-slot python -m pytest radark/tests`; all must pass. Record the test count;
   failing or flaky tests follow hub `AGENTS.md` §10.
-- [ ] 3.3 Run `ho sync`; close HO-20261121-g3zr (`ho close HO-20261121-g3zr`), since its result was verified in 1.2,
+- [x] 3.3 Run `ho sync`; close HO-20261121-g3zr (`ho close HO-20261121-g3zr`), since its result was verified in 1.2,
   so radark-handover can archive its change. Verify `ho show HO-20261121-g3zr --json` shows status `closed`.
-- [ ] 3.4 Last step: `ho done HO-20261121-gcrx -m "..."` with radark-handover version and contract, radark-factory
+- [x] 3.4 Last step: `ho done HO-20261121-gcrx -m "..."` with radark-handover version and contract, radark-factory
   version 0.8.0, commit IDs of both teams, change names (this change and radark-handover's), test counts, and the
   owner's order of steps (tag radark-handover v0.2.1 first, then tag/release radark-factory 0.8.0 and reinstall);
   then `ho sync`. Verify `ho show HO-20261121-gcrx --json` shows radark-factory `done`.
@@ -48,3 +48,5 @@ Handover: HO-20261121-gcrx. radark-handover part: HO-20261121-g3zr (sent in the 
   and was already closed by radark-factory on 2026-11-21 after verification.
 - 1.2: `python <radark-handover>/ho.py --version --json` reports version `0.2.1`, contract `1`.
 - 2.3: no doc names the current pinned tag; `0.2.0` in `radark/README.md` are sample outputs (design D5), unchanged.
+- 3.2: full suite 1163 passed (641 s), no failing or flaky tests.
+- 3.3: HO-20261121-g3zr was already closed by radark-factory before this session (status closed).
