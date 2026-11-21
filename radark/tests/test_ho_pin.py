@@ -100,3 +100,9 @@ def test_missing_pin_or_tag_fails(dependencies):
 
 def test_two_contracts_during_migration():
     assert pin_problem(GOOD, {"v0.2.0": 2}, (1, 2)) is None
+
+
+def test_earlier_tag_stays_known():
+    # pin-handover-v0-2-1 D2: moving the pin keeps earlier known tags in the table.
+    assert HO_RELEASE_CONTRACTS.get("v0.2.0") == 1
+    assert HO_RELEASE_CONTRACTS.get("v0.2.1") == 1
