@@ -26,7 +26,7 @@ Handover: HO-20261121-gcrx. radark-handover part: HO-20261121-g3zr (sent in the 
 
 ## 3. Release version and full check
 
-- [ ] 3.1 Bump `version` in `pyproject.toml` from `0.7.0` to `0.8.0` (design D4) and verify
+- [x] 3.1 Bump `version` in `pyproject.toml` from `0.7.0` to `0.8.0` (design D4) and verify
   `python -m radark --version` prints `radark 0.8.0` from the working tree; commit as `Release 0.8.0`. No tag, push
   or install.
 - [ ] 3.2 Run the full suite `radark-test-slot python -m pytest radark/tests`; all must pass. Record the test count;
