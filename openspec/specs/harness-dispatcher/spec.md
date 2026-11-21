@@ -2258,11 +2258,15 @@ The banner SHALL NOT be printed by any other command (`plan`, `status`, `cockpit
 - **THEN** only the configuration error is printed, without the banner
 
 ### Requirement: Pinned ho matches the supported contract
-The engine SHALL keep one table, next to the supported contract constant, mapping each radark-handover release tag it knows to its `ho` JSON contract. An offline test SHALL read the `radark-handover` pin in `pyproject.toml` and fail when the pin or its tag is missing, the tag is not in the table, or the tag's contract is not supported; the message SHALL name the pin, the tag, the found contract and the supported contracts.
+The engine SHALL keep one table, next to the supported contract constant, mapping each radark-handover release tag it knows to its `ho` JSON contract. A new pin SHALL add its tag to the table; earlier known tags SHALL stay in it. An offline test SHALL read the `radark-handover` pin in `pyproject.toml` and fail when the pin or its tag is missing, the tag is not in the table, or the tag's contract is not supported; the message SHALL name the pin, the tag, the found contract and the supported contracts.
 
 #### Scenario: Current pin is compatible
-- **WHEN** `pyproject.toml` pins `radark-handover @ git+...@v0.2.0`, the table maps `v0.2.0` to contract `1`, and the engine supports contract `1`
+- **WHEN** `pyproject.toml` pins `radark-handover @ git+...@v0.2.1`, the table maps `v0.2.1` to contract `1`, and the engine supports contract `1`
 - **THEN** the pin test passes
+
+#### Scenario: Earlier tag stays known
+- **WHEN** the pin moves from `v0.2.0` to `v0.2.1`
+- **THEN** the table still maps `v0.2.0` to contract `1`, and a pin naming `v0.2.0` would also pass the test
 
 #### Scenario: Pin to a tag with an unsupported contract
 - **WHEN** the pin names a tag the table maps to contract `2` and the engine supports only contract `1`
