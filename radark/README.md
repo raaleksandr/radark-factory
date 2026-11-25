@@ -871,8 +871,12 @@ escalation.
   `14:50  ! Usage: five_hour 93% used, resets 15:30 (local), waiting 40 min.` or `14:38  ! Usage limit hit:
   five_hour resets 15:30 (local), waiting 52 min.` (local time, with the date when not today), an hourly
   `! still waiting ...` reminder during long waits, and `15:31  Usage window five_hour has reset; resuming.`
+  A threshold wait stored by an earlier run is re-checked before every step against the current run's thresholds
+  (its budget, else `usage_pause_percent`): when its window no longer holds, the wait is dropped
+  (`15:02  Usage: seven_day 90% used is below 95% (run budget); the stored usage wait no longer applies, resuming.`,
+  `usage_wait_dropped` in `runs.jsonl`); a `limit_hit` wait and another pipeline's hold are never dropped this way.
   `dry-run` and a held `once` print each
-  window's reading and the guard's verdict. Usage from the owner's own manual sessions shows up only in the next
+  window's reading and the guard's verdict, with the cause of a stored wait. Usage from the owner's own manual sessions shows up only in the next
   dispatcher session's stream.
 - **Usage budget of a run:** `run --budget-5h PCT` / `--budget-7d PCT` (integers 1–100, alone or together; also on
   `run --once`, `run --goal`, `dry-run`) spend a window only up to PCT % in **this run**; nothing is stored, the next

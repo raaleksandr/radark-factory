@@ -81,3 +81,8 @@ limit_hit)`. `dry-run` writes nothing, so it only reports; the drop happens in a
 - The optional `status` item of the handover is met through `dry-run` / `run --once` output, not the `status`
   subcommand.
 - Log event name `usage_wait_dropped` chosen here; nothing reads it yet.
+- Apply: the D2 helper also keeps the wait of a budgeted window whose budget is reached (`budget_reached` for that
+  window). In a run `budget_end()` ends the run first anyway; the check keeps `dry-run` from claiming the next step
+  would start while its budget line says the run would end.
+- Apply: when the window has reset or has no live reading, the console line says so instead of naming a share
+  (`Usage: seven_day has reset or has no current reading (threshold 95%, run budget); ...`).

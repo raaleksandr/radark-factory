@@ -1971,12 +1971,37 @@ class Dispatcher:
 
     def usage_hold(self) -> None:
         """Hold new steps while a window that has not reset is at or above the threshold (design D3, D5), and while
-        another pipeline's usage-limit hold lasts (machine-wide D3)."""
+        another pipeline's usage-limit hold lasts (machine-wide D3). A stored threshold wait that the current run's
+        thresholds no longer reach is dropped first (threshold-wait-follows-run-budget D1)."""
+        self.drop_stale_threshold_wait()
         held = held_windows(self.effective_usage(), self.cfg.usage_pause_percent, time.time(), set(self.budget))
         if held:
             window, w = max(held, key=lambda x: x[1]["resets_at"])
             self.wait_for_reset(window, w, "threshold")
         self.shared_hold()
+
+    def drop_stale_threshold_wait(self) -> None:
+        """Drop a stored threshold wait whose window no longer holds with this run's thresholds (D2, D3)."""
+        meta = self.state.meta
+        wait = stale_threshold_wait(meta, self.effective_usage(), self.cfg.usage_pause_percent, self.budget,
+                                    time.time())
+        if wait is None:
+            return
+        window = wait["window"]
+        budgeted = window in self.budget
+        threshold = self.budget[window] if budgeted else self.cfg.usage_pause_percent
+        live = dict(live_windows(self.effective_usage(), time.time()))
+        utilization = live[window].get("utilization") if window in live else None
+        meta.pop("backoff_until", None)
+        meta.pop("usage_wait", None)
+        self._usage_announced = None
+        self.log.write("usage_wait_dropped", window=window, utilization=utilization, threshold=threshold,
+                       budget=budgeted, until=wait.get("until"))
+        source = "run budget" if budgeted else "usage_pause_percent"
+        now_text = (f"{percent_text(utilization)} used is below {threshold}% ({source})" if window in live
+                    else f"has reset or has no current reading (threshold {threshold}%, {source})")
+        self.out(f"{stamp()}  Usage: {window} {now_text}; the stored usage wait no longer applies, resuming.")
+        self.state.save()
 
     def shared_hold(self) -> None:
         """Wait out another pipeline's usage-limit hold, without doubling this instance's own back-off."""
@@ -2820,6 +2845,25 @@ def held_windows(usage: dict | None, threshold: int, now: float, exempt: set[str
             if name not in exempt and (percent(w.get("utilization")) >= threshold or w.get("status") == "rejected")]
 
 
+def stale_threshold_wait(meta: dict, usage: dict | None, threshold: int, budget: dict[str, int], now: float
+                         ) -> dict | None:
+    """The stored threshold wait when its window no longer holds with these thresholds, else None
+    (threshold-wait-follows-run-budget D2). A back-off later than the wait's own until-time is kept: part of it is
+    not the threshold's (a `limit_hit` or doubling back-off)."""
+    wait = meta.get("usage_wait")
+    if not isinstance(wait, dict) or wait.get("cause") != "threshold" or not wait.get("window"):
+        return None
+    backoff, until = meta.get("backoff_until", 0), wait.get("until")
+    if not isinstance(backoff, (int, float)) or not isinstance(until, (int, float)) or not now < backoff <= until:
+        return None
+    window = wait["window"]
+    if any(name == window for name, _ in held_windows(usage, threshold, now, set(budget))):
+        return None
+    if window in budget and budget_reached(usage, {window: budget[window]}, now):
+        return None  # the run ends at its budget instead (spec: Threshold still reached)
+    return wait
+
+
 def budget_reached(usage: dict | None, budget: dict[str, int], now: float) -> tuple[str, dict] | None:
     """The first budgeted window, in `budget` order, used at or above its budget or reported `rejected` (D2)."""
     live = dict(live_windows(usage, now))
@@ -2860,8 +2904,13 @@ def usage_report(d: Dispatcher) -> list[str]:
         window, w = max(held, key=lambda x: x[1]["resets_at"])
         lines.append(f"guard: holding until {clock(w['resets_at'] + USAGE_MARGIN_S)} "
                      f"({window} {percent_text(w.get('utilization'))}, threshold {d.cfg.usage_pause_percent}%)")
+    elif (stale := stale_threshold_wait(d.state.meta, usage, d.cfg.usage_pause_percent, d.budget, now)):
+        lines.append(f"guard: a stored threshold wait ({stale['window']}, until {clock(stale['until'])}) no longer "
+                     "applies with this run's thresholds; next step would start")
     elif backoff > now:
-        lines.append(f"guard: below the threshold, but in usage-limit back-off until {clock(backoff)}")
+        cause = (d.state.meta.get("usage_wait") or {}).get("cause")
+        lines.append(f"guard: below the threshold, but in usage-limit back-off until {clock(backoff)}"
+                     + (f" (cause {cause})" if cause else ""))
     else:
         lines.append(f"guard: next step would start (threshold {d.cfg.usage_pause_percent}%)")
     if d.budget:
