@@ -31,4 +31,4 @@ closes the handover; they are not tasks of this change.
 - [x] 3.2 Full suite: `radark-test-slot python -m pytest radark/tests`; failing or flaky tests per hub `AGENTS.md`
       section 10, reported in the result
 - [x] 3.3 Commit locally (no push, tag, release or reinstall), citing HO-20261125-mjzz
-- [ ] 3.4 `ho done HO-20261125-mjzz -m "<change name, commit IDs, test counts, failing/flaky tests>"` — the last step
+- [x] 3.4 `ho done HO-20261125-mjzz -m "<change name, commit IDs, test counts, failing/flaky tests>"` — the last step
